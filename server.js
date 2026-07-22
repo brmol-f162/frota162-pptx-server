@@ -24,7 +24,6 @@ app.get('/', (req, res) => res.json({ status: 'ok' }));
 
 app.post('/generate', async (req, res) => {
   try {
-    // Aceita string ou objeto — limpa backticks se vier como string
     let raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
     raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
     const d = JSON.parse(raw);
@@ -105,15 +104,18 @@ app.post('/generate', async (req, res) => {
 
     await pres.writeFile({ fileName: outputPath });
 
-    // UPLOAD DRIVE
+    // UPLOAD DRIVE — Shared Drive
     const auth = new google.auth.GoogleAuth({
       credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
       scopes: ['https://www.googleapis.com/auth/drive'],
     });
     const drive = google.drive({ version: 'v3', auth });
+
     const pastaId = d.pasta_mes_id || process.env.PASTA_RAIZ_ID;
+    const sharedDriveId = process.env.SHARED_DRIVE_ID;
 
     const uploaded = await drive.files.create({
+      supportsAllDrives: true,
       requestBody: {
         name: nomeArquivo,
         parents: [pastaId],
@@ -128,6 +130,7 @@ app.post('/generate', async (req, res) => {
 
     await drive.permissions.create({
       fileId: uploaded.data.id,
+      supportsAllDrives: true,
       requestBody: { role: 'writer', type: 'anyone' },
     });
 
