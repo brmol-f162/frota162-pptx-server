@@ -136,7 +136,7 @@ function gerarPPTX(d, outPath) {
   });
 
   [Z1W-0.08,Z2X+Z2W-0.08].forEach(sx=>{
-    s2.addShape(pres.ShapeType.oval,{x:sx-0.10,y:CY+(CH/2)-0.16,w:0.32,h:0.32,fill:{color:COR.branco},line:{color:COR.laranja,width:1.5}});
+    s2.addShape(pres.ShapeType.ellipse,{x:sx-0.10,y:CY+(CH/2)-0.16,w:0.32,h:0.32,fill:{color:COR.branco},line:{color:COR.laranja,width:1.5}});
     s2.addText('→',{x:sx-0.10,y:CY+(CH/2)-0.16,w:0.32,h:0.32,fontFace:'Montserrat',fontSize:10,bold:true,color:COR.laranja,align:'center',valign:'middle',margin:0});
   });
 
@@ -146,7 +146,7 @@ function gerarPPTX(d, outPath) {
   s2.addShape(pres.ShapeType.rect,{x:rx+0.17,y:SY+0.21,w:0.018,h:(SH+SG)*3+0.21,fill:{color:COR.divisor}});
   (d.passos||[]).forEach((p,i)=>{
     const py=SY+i*(SH+SG);
-    s2.addShape(pres.ShapeType.oval,{x:rx,y:py+0.08,w:0.42,h:0.42,fill:{color:COR.laranja}});
+    s2.addShape(pres.ShapeType.ellipse,{x:rx,y:py+0.08,w:0.42,h:0.42,fill:{color:COR.laranja}});
     s2.addText(String(i+1),{x:rx,y:py+0.08,w:0.42,h:0.42,fontFace:'Montserrat',fontSize:13,bold:true,color:COR.branco,align:'center',valign:'middle',margin:0});
     s2.addText(p.titulo||'',{x:Z2X+0.90,y:py+0.08,w:Z2W-1.0,h:0.26,fontFace:'Montserrat',fontSize:9.5,bold:true,color:COR.dark,margin:0,wrap:true});
     s2.addText(p.desc||'',{x:Z2X+0.90,y:py+0.36,w:Z2W-1.0,h:0.36,fontFace:'Montserrat',fontSize:8.5,color:'555555',valign:'top',margin:0,wrap:true});
