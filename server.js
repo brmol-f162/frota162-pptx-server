@@ -97,7 +97,7 @@ function gerarPPTX(d, outPath) {
   (d.cards||[]).forEach((c,i) => {
     if(i>3) return;
     const {cx,cy}=CPOS[i]; const p=CPAL[i];
-    s1.addShape(pres.ShapeType.roundRect,{x:cx,y:cy,w:4.60,h:1.72,fill:{color:p.fundo},line:{color:COR.divisor,width:0.5},rectRadius:0.06});
+    s1.addShape(pres.ShapeType.rect,{x:cx,y:cy,w:4.60,h:1.72,fill:{color:p.fundo},line:{color:COR.divisor,width:0.5}});
     s1.addShape(pres.ShapeType.rect,{x:cx,y:cy+0.16,w:0.045,h:1.40,fill:{color:p.strip}});
     s1.addText(c.stat||'',{x:cx+0.14,y:cy+0.10,w:4.40,h:0.44,fontFace:'Montserrat',fontSize:22,bold:true,color:p.stat,margin:0});
     s1.addText(c.titulo||'',{x:cx+0.14,y:cy+0.52,w:4.38,h:0.26,fontFace:'Montserrat',fontSize:9.5,bold:true,color:COR.dark,margin:0});
@@ -158,7 +158,7 @@ function gerarPPTX(d, outPath) {
   s2.addText(d.z3_sub1||'',{x:Z3X+0.18,y:CY+0.96,w:Z3W-0.22,h:0.28,fontFace:'Montserrat',fontSize:8.5,color:'555555',margin:0,wrap:true});
   s2.addShape(pres.ShapeType.rect,{x:Z3X+0.18,y:CY+1.32,w:Z3W-0.36,h:0.018,fill:{color:'BFE3BF'}});
   s2.addText(d.z3_investimento||'',{x:Z3X+0.18,y:CY+1.40,w:Z3W-0.22,h:0.35,fontFace:'Montserrat',fontSize:15,bold:true,color:COR.verde,margin:0,wrap:true});
-  s2.addShape(pres.ShapeType.roundRect,{x:Z3X+0.18,y:CY+1.90,w:Z3W-0.36,h:0.38,fill:{color:'D4EED4'},line:{color:'BFE3BF',width:0.5},rectRadius:0.06});
+  s2.addShape(pres.ShapeType.rect,{x:Z3X+0.18,y:CY+1.90,w:Z3W-0.36,h:0.38,fill:{color:'D4EED4'},line:{color:'BFE3BF',width:0.5}});
   s2.addText(d.z3_badge||'',{x:Z3X+0.22,y:CY+1.90,w:Z3W-0.44,h:0.38,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0,wrap:true});
   s2.addText(d.z3_nota||'',{x:Z3X+0.18,y:CY+3.30,w:Z3W-0.22,h:0.60,fontFace:'Montserrat',fontSize:6.5,italic:true,color:'AAAAAA',valign:'top',margin:0,wrap:true});
 
@@ -197,7 +197,7 @@ function gerarPPTX(d, outPath) {
     if(dp<=90){
       let bi=DIAS.findIndex(x=>x>=dp); if(bi<0)bi=3;
       const pbx=X0+bi*(BW+BG),pbH=MH*(DIAS[bi]/90),pbTop=BY-pbH;
-      s3.addShape(pres.ShapeType.roundRect,{x:pbx+0.15,y:pbTop-0.58,w:BW-0.30,h:0.35,fill:{color:COR.branco},line:{color:COR.verde,width:1.5},rectRadius:0.06});
+      s3.addShape(pres.ShapeType.rect,{x:pbx+0.15,y:pbTop-0.58,w:BW-0.30,h:0.35,fill:{color:COR.branco},line:{color:COR.verde,width:1.5}});
       s3.addText(dp<=45?`↑ Payback: ~${dp} dias`:`↑ Payback: ~${Math.round(dp/30)} meses`,{x:pbx+0.15,y:pbTop-0.58,w:BW-0.30,h:0.35,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0});
     }
   }
