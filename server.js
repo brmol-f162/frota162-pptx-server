@@ -30,7 +30,7 @@ function callClaude(text) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
       model: 'claude-sonnet-4-5',
-      max_tokens: 2000,
+      max_tokens: 4000,
       system: SYSTEM,
       messages: [{ role: 'user', content: text }]
     });
@@ -48,8 +48,29 @@ function callClaude(text) {
       res.on('end', () => {
         try {
           const p = JSON.parse(data);
-          const t = p.content[0].text.replace(/```json/gi,'').replace(/```/g,'').trim();
-          resolve(JSON.parse(t));
+          let t = p.content[0].text.replace(/```json/gi,'').replace(/```/g,'').trim();
+          // Tenta corrigir JSON truncado fechando chaves/colchetes abertos
+          try {
+            resolve(JSON.parse(t));
+          } catch(parseErr) {
+            // Conta chaves e colchetes para tentar fechar
+            let opens = 0, openBrackets = 0;
+            for (const ch of t) {
+              if (ch === '{') opens++;
+              else if (ch === '}') opens--;
+              else if (ch === '[') openBrackets++;
+              else if (ch === ']') openBrackets--;
+            }
+            // Remove trailing comma/incomplete field
+            t = t.replace(/,\s*$/, '').replace(/,\s*"[^"]*"\s*:\s*[^,}\]]*$/, '');
+            // Close open brackets and braces
+            t += ']'.repeat(Math.max(0, openBrackets)) + '}'.repeat(Math.max(0, opens));
+            try {
+              resolve(JSON.parse(t));
+            } catch(e2) {
+              reject(new Error('Claude parse: ' + parseErr.message));
+            }
+          }
         } catch(e) { reject(new Error('Claude parse: ' + e.message)); }
       });
     });
@@ -228,7 +249,13 @@ app.post('/generate', (req, res) => {
       const input = JSON.parse(raw);
       const { titulo, executivo, data_call, transcricao, pasta_mes_id } = input;
 
-      const conteudo = `Título: ${titulo||'Sem título'}\nData: ${data_call||''}\nExecutivo Frota162: ${executivo||''}\n\nTranscrição:\n${transcricao||''}`;
+      // Filtro de qualidade — descarta calls sem transcrição suficiente
+    if (!transcricao || transcricao.length < 500) {
+      await postSlack(`:no_entry_sign: *Call descartada — ${titulo||'Sem título'}* (${executivo||''}): transcrição ausente ou muito curta para gerar material.`).catch(()=>{});
+      return;
+    }
+
+    const conteudo = `Título: ${titulo||'Sem título'}\nData: ${data_call||''}\nExecutivo Frota162: ${executivo||''}\n\nTranscrição:\n${transcricao||''}`;
       const d = await callClaude(conteudo);
 
       const empresa = d.empresa || 'Prospect';
