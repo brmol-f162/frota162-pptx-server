@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: frota162-pptx-server
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: GOOGLE_CREDENTIALS
+        sync: false
+      - key: PASTA_RAIZ_ID
+        value: 1j3gR3LbMEd3W5rkz6B422Nga9yLwdirQ
