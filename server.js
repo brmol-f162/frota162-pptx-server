@@ -10,6 +10,41 @@ const app = express();
 app.use(express.text({ type: '*/*', limit: '50mb' }));
 app.use(express.json({ limit: '50mb' }));
 
+// Controle de IDs processados — persiste em arquivo local
+const PROCESSED_FILE = '/tmp/frota162_processed.json';
+
+function loadProcessed() {
+  try {
+    if (fs.existsSync(PROCESSED_FILE)) {
+      const data = JSON.parse(fs.readFileSync(PROCESSED_FILE, 'utf8'));
+      // Limpa IDs com mais de 48h para não crescer infinito
+      const cutoff = Date.now() - (48 * 60 * 60 * 1000);
+      const cleaned = {};
+      for (const [id, ts] of Object.entries(data)) {
+        if (ts > cutoff) cleaned[id] = ts;
+      }
+      return cleaned;
+    }
+  } catch(e) { console.log('loadProcessed error:', e.message); }
+  return {};
+}
+
+function saveProcessed(ids) {
+  try { fs.writeFileSync(PROCESSED_FILE, JSON.stringify(ids), 'utf8'); }
+  catch(e) { console.log('saveProcessed error:', e.message); }
+}
+
+function isProcessed(callId) {
+  const ids = loadProcessed();
+  return !!ids[callId];
+}
+
+function markProcessed(callId) {
+  const ids = loadProcessed();
+  ids[callId] = Date.now();
+  saveProcessed(ids);
+}
+
 const COR = {
   laranja:'E8401C', dark:'1A1A1A', branco:'FFFFFF', fundo:'F7F6F4',
   divisor:'E0DFDD', verde:'1E6B1E', vermelho:'CC2200', azul:'1565C0', cinza:'888888',
@@ -96,6 +131,33 @@ function callClaude(text) {
     req.on('error', reject);
     req.setTimeout(180000, () => { req.destroy(); reject(new Error('Claude timeout')); });
     req.write(body); req.end();
+  });
+}
+
+function fetchTranscricao(callId) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.elephan.dev',
+      path: `/v1/transcribes/${callId}`,
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${process.env.ELEPHAN_API_KEY}`,
+        'Accept': 'application/json'
+      }
+    }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try {
+          const p = JSON.parse(data);
+          const texto = p.data?.transcript?.text || p.transcript?.text || p.data?.content || '';
+          resolve(texto);
+        } catch(e) { resolve(''); }
+      });
+    });
+    req.on('error', () => resolve(''));
+    req.setTimeout(30000, () => { req.destroy(); resolve(''); });
+    req.end();
   });
 }
 
@@ -319,17 +381,27 @@ app.post('/generate', (req, res) => {
       let raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
       raw = raw.replace(/```json/gi,'').replace(/```/g,'').trim();
       const input = JSON.parse(raw);
-      const { titulo, executivo, data_call, transcricao, pasta_mes_id } = input;
+      const { titulo, executivo, data_call, pasta_mes_id, call_id } = input;
 
-      // Filtro de qualidade — título deve conter "Frota162 ><" ou "Frota162 <>" (reunião com cliente)
+      // Filtro de qualidade — título deve conter "Frota162 ><" ou "Frota162 <>"
       const tituloLower = (titulo||'').toLowerCase();
       const ehReuniaoCliente = tituloLower.includes('frota162 ><') || tituloLower.includes('frota162 <>') || tituloLower.includes('frota162><') || tituloLower.includes('frota162<>');
       if (!ehReuniaoCliente) {
         console.log('Descartado — não é reunião com cliente:', titulo);
         return;
       }
+
+      // Busca transcrição diretamente no Elephan pelo call_id
+      const transcricao = await fetchTranscricao(call_id);
       if (!transcricao || transcricao.length < 500) {
         await postSlack(`:no_entry_sign: *Call descartada — ${titulo||'Sem título'}* (${executivo||''}): transcrição ausente ou muito curta para gerar material.`).catch(()=>{});
+        return;
+      }
+
+      // Verifica se já foi processada
+      const callId = input.call_id || titulo;
+      if (callId && isProcessed(callId)) {
+        console.log('Call já processada, pulando:', callId);
         return;
       }
 
@@ -367,6 +439,9 @@ app.post('/generate', (req, res) => {
       await drive.permissions.create({ fileId: uploaded.data.id, supportsAllDrives: true, requestBody: { role: 'writer', type: 'anyone' } });
       fs.unlinkSync(outPath);
 
+      // Marca como processada
+      if (callId) markProcessed(callId);
+
       // Temperatura com emoji
       const tempEmoji = d.temperatura==='quente' ? '🔴' : d.temperatura==='morno' ? '🟡' : '🔵';
 
@@ -378,7 +453,8 @@ app.post('/generate', (req, res) => {
       const roiAnual = d.roi_anual || 0;
       const roiTexto = roiAnual > 0 ? `R$${Math.round(roiAnual).toLocaleString('pt-BR')}/ano` : 'A calcular';
 
-      const msg = `:car: *Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+      const dataHoraReuniao = data_call ? `${data_call}` : 'Data não informada';
+      const msg = `:car: *Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataHoraReuniao}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
 
       await postSlack(msg);
 
