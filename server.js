@@ -138,7 +138,7 @@ function gerarPPTX(d, outPath) {
   (d.cards||[]).forEach((c,i)=>{
     if(i>3) return;
     const {cx,cy}=CPOS[i]; const p=CPAL[i];
-    s1.addShape(pres.ShapeType.rect,{x:cx,y:cy,w:CW,h:CH,fill:{color:p.fundo},line:{color:COR.divisor,width:0.5}});
+    s1.addShape(pres.ShapeType.rect,{x:cx,y:cy,w:CW,h:CH2,fill:{color:p.fundo},line:{color:COR.divisor,width:0.5}});
     s1.addShape(pres.ShapeType.rect,{x:cx,y:cy+0.14,w:0.05,h:CH-0.28,fill:{color:p.strip}});
     // Stat
     s1.addText(c.stat||'',{x:cx+0.16,y:cy+0.08,w:CW-0.24,h:0.46,fontFace:'Montserrat',fontSize:24,bold:true,color:p.stat,margin:0});
@@ -166,11 +166,11 @@ function gerarPPTX(d, outPath) {
   s2.addText(d.s2_header_bold||'',{x:0.22,y:0.04,w:9.3,h:0.44,fontFace:'Montserrat',fontSize:12,bold:true,color:COR.laranja,valign:'middle',margin:0,wrap:true});
   s2.addText(d.s2_header_normal||'',{x:0.22,y:0.50,w:9.3,h:0.28,fontFace:'Montserrat',fontSize:9,color:COR.branco,valign:'middle',margin:0});
 
-  const CY=0.84, CH=4.16;
+  const CY=0.84, CH2=4.16;
   const Z1X=0,Z1W=3.10,Z2X=3.10,Z2W=3.80,Z3X=6.90,Z3W=3.10;
 
   // Zona 1 HOJE
-  s2.addShape(pres.ShapeType.rect,{x:Z1X,y:CY,w:Z1W,h:CH,fill:{color:'FFEDE7'}});
+  s2.addShape(pres.ShapeType.rect,{x:Z1X,y:CY,w:Z1W,h:CH2,fill:{color:'FFEDE7'}});
   s2.addText('HOJE',{x:Z1X+0.16,y:CY+0.16,w:Z1W-0.22,h:0.22,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.vermelho,charSpacing:1,margin:0});
   s2.addText(d.z1_stat1||'',{x:Z1X+0.16,y:CY+0.40,w:Z1W-0.22,h:0.46,fontFace:'Montserrat',fontSize:26,bold:true,color:COR.vermelho,margin:0});
   s2.addText(d.z1_sub1||'',{x:Z1X+0.16,y:CY+0.88,w:Z1W-0.22,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
@@ -183,12 +183,12 @@ function gerarPPTX(d, outPath) {
 
   // Setas de conexão
   [Z1W-0.10, Z2X+Z2W-0.10].forEach(sx=>{
-    s2.addShape(pres.ShapeType.ellipse,{x:sx-0.14,y:CY+(CH/2)-0.16,w:0.30,h:0.30,fill:{color:COR.branco},line:{color:COR.laranja,width:1.5}});
-    s2.addText('→',{x:sx-0.14,y:CY+(CH/2)-0.16,w:0.30,h:0.30,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.laranja,align:'center',valign:'middle',margin:0});
+    s2.addShape(pres.ShapeType.ellipse,{x:sx-0.14,y:CY+(CH2/2)-0.16,w:0.30,h:0.30,fill:{color:COR.branco},line:{color:COR.laranja,width:1.5}});
+    s2.addText('→',{x:sx-0.14,y:CY+(CH2/2)-0.16,w:0.30,h:0.30,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.laranja,align:'center',valign:'middle',margin:0});
   });
 
   // Zona 2 COMO RESOLVE
-  s2.addShape(pres.ShapeType.rect,{x:Z2X,y:CY,w:Z2W,h:CH,fill:{color:'FCFCFB'}});
+  s2.addShape(pres.ShapeType.rect,{x:Z2X,y:CY,w:Z2W,h:CH2,fill:{color:'FCFCFB'}});
   s2.addText('COMO A FROTA162 RESOLVE',{x:Z2X+0.16,y:CY+0.16,w:Z2W-0.22,h:0.22,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.dark,charSpacing:0.5,margin:0});
   const SY=CY+0.50,SH=0.72,SG=0.12,rx=Z2X+0.36;
   s2.addShape(pres.ShapeType.rect,{x:rx+0.16,y:SY+0.20,w:0.016,h:(SH+SG)*3+0.20,fill:{color:COR.divisor}});
@@ -201,7 +201,7 @@ function gerarPPTX(d, outPath) {
   });
 
   // Zona 3 RESULTADO
-  s2.addShape(pres.ShapeType.rect,{x:Z3X,y:CY,w:Z3W,h:CH,fill:{color:'EAF6EA'}});
+  s2.addShape(pres.ShapeType.rect,{x:Z3X,y:CY,w:Z3W,h:CH2,fill:{color:'EAF6EA'}});
   s2.addText(d.tem_roi?'RESULTADO':'PLANO RECOMENDADO',{x:Z3X+0.16,y:CY+0.16,w:Z3W-0.22,h:0.22,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.verde,charSpacing:1,margin:0});
   s2.addText(d.z3_stat||'',{x:Z3X+0.16,y:CY+0.40,w:Z3W-0.22,h:0.46,fontFace:'Montserrat',fontSize:26,bold:true,color:COR.verde,margin:0});
   s2.addText(d.z3_sub1||'',{x:Z3X+0.16,y:CY+0.88,w:Z3W-0.22,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
