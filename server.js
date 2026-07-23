@@ -138,7 +138,7 @@ function gerarPPTX(d, outPath) {
   (d.cards||[]).forEach((c,i)=>{
     if(i>3) return;
     const {cx,cy}=CPOS[i]; const p=CPAL[i];
-    s1.addShape(pres.ShapeType.rect,{x:cx,y:cy,w:CW,h:CH2,fill:{color:p.fundo},line:{color:COR.divisor,width:0.5}});
+    s1.addShape(pres.ShapeType.rect,{x:cx,y:cy,w:CW,h:CH,fill:{color:p.fundo},line:{color:COR.divisor,width:0.5}});
     s1.addShape(pres.ShapeType.rect,{x:cx,y:cy+0.14,w:0.05,h:CH-0.28,fill:{color:p.strip}});
     // Stat
     s1.addText(c.stat||'',{x:cx+0.16,y:cy+0.08,w:CW-0.24,h:0.46,fontFace:'Montserrat',fontSize:24,bold:true,color:p.stat,margin:0});
