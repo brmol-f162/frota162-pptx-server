@@ -51,7 +51,7 @@ REGRAS: valor mínimo multa R$130. sinal menos SÓ nas barras slide 3. tem_roi=f
 TEMPERATURA: quente=lead engajado perguntas próximos passos decisor envolvido. morno=interesse sem comprometimento claro. frio=pouco engajamento objeções sem próximo passo.
 
 JSON (todos obrigatórios):
-{"empresa":"","executivo":"","perfil_lead":"decisor ou influenciador","placas":0,"cnpjs":0,"segmento":"","tem_roi":true,"temperatura":"quente ou morno ou frio","roi_anual":0,"s1_header_bold":"frase provocativa específica max 70 chars","s1_header_sub":"X placas · Y CNPJs · Região","s1_subtitulo":"contexto segmento voltado ao cliente","cards":[{"stat":"","titulo":"max 40 chars","desc":"2-3 linhas específicas voltadas ao cliente"},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""}],"s1_footer_bold":"urgência específica com número real max 80 chars","s1_footer_normal":"complemento","s2_header_bold":"Da dor de -R$X ao retorno de +R$Y por ano. OU X placas sem visibilidade a recomendacao é o Enterprise N.","s2_header_normal":"Como a Frota162 resolve, em 3 passos — [Empresa]","z1_stat1":"","z1_sub1":"1 linha","z1_stat2":"","z1_sub2":"1 linha","z1_bullets":["dado específico 1","dado específico 2"],"passos":[{"titulo":"max 35 chars voltado ao cliente","desc":"1 linha no contexto do cliente"},{"titulo":"","desc":""},{"titulo":"","desc":""},{"titulo":"","desc":""}],"z3_stat":"ROI anual R$X OU Enterprise 1 OU Enterprise 2 OU Enterprise 3","z3_sub1":"retorno por ano ou features do plano","z3_investimento":"R$X,XX/mês","z3_badge":"diferencial específico para este cliente","z3_nota":"condições comerciais e limitações reais","s2_cta_bold":"próximo passo combinado na call","s2_cta_normal":"ação concreta","custo_mensal":0,"investimento_mensal_num":0,"dias_payback":0,"s3_header_bold":"Cada mês sem a Frota162 é R$X saindo do caixa da [Empresa].","s3_header_sub":"base confirmada na call","s3_formula":"fórmula usada","s3_nota":"metodologia e limitações","slack_resumo":"2 linhas objetivas SEM EMOJIS: dor principal + alerta crucial","proximo_passo":"ação concreta para o executivo"}`;
+{"empresa":"","executivo":"","perfil_lead":"decisor ou influenciador","placas":0,"cnpjs":0,"segmento":"","tem_roi":true,"temperatura":"quente ou morno ou frio","roi_anual":0,"s1_header_bold":"[Nome do decisor se identificado],\\nvocês têm X placas [situação específica]. Formato: Nome,\\nvocês têm 22 placas rodando SP sem visibilidade. Se sem nome: frase provocativa com dado real max 70 chars","s1_header_sub":"X placas · Y CNPJs · Região","s1_subtitulo":"contexto segmento voltado ao cliente","cards":[{"stat":"","titulo":"max 40 chars","desc":"2-3 linhas específicas voltadas ao cliente"},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""}],"s1_footer_bold":"urgência específica com número real max 80 chars","s1_footer_normal":"complemento","s2_header_bold":"Da dor de -R$X ao retorno de +R$Y por ano. OU X placas sem visibilidade a recomendacao é o Enterprise N.","s2_header_normal":"Como a Frota162 resolve, em 3 passos — [Empresa]","z1_stat1":"","z1_sub1":"1 linha","z1_stat2":"","z1_sub2":"1 linha","z1_bullets":["dado específico 1","dado específico 2"],"passos":[{"titulo":"max 35 chars voltado ao cliente","desc":"1 linha no contexto do cliente"},{"titulo":"","desc":""},{"titulo":"","desc":""},{"titulo":"","desc":""}],"z3_stat":"ROI anual R$X OU Enterprise 1 OU Enterprise 2 OU Enterprise 3","z3_sub1":"retorno por ano ou features do plano","z3_investimento":"R$X,XX/mês","z3_badge":"diferencial específico para este cliente","z3_nota":"condições comerciais e limitações reais","s2_cta_bold":"próximo passo combinado na call","s2_cta_normal":"ação concreta","custo_mensal":0,"investimento_mensal_num":0,"dias_payback":0,"s3_header_bold":"Cada mês sem a Frota162 é R$X saindo do caixa da [Empresa].","s3_header_sub":"base confirmada na call","s3_formula":"fórmula usada","s3_nota":"metodologia e limitações","slack_resumo":"2 linhas objetivas SEM EMOJIS: dor principal + alerta crucial","proximo_passo":"ação concreta para o executivo"}`;
 
 function callClaude(text) {
   return new Promise((resolve, reject) => {
@@ -181,11 +181,7 @@ function gerarPPTX(d, outPath) {
     s2.addText('· '+b,{x:Z1X+0.16,y:CY+2.10+(i*0.28),w:Z1W-0.22,h:0.26,fontFace:'Montserrat',fontSize:7.5,color:'444444',margin:0,wrap:true});
   });
 
-  // Setas de conexão
-  [Z1W-0.10, Z2X+Z2W-0.10].forEach(sx=>{
-    s2.addShape(pres.ShapeType.ellipse,{x:sx-0.14,y:CY+(CH2/2)-0.16,w:0.30,h:0.30,fill:{color:COR.branco},line:{color:COR.laranja,width:1.5}});
-    s2.addText('→',{x:sx-0.14,y:CY+(CH2/2)-0.16,w:0.30,h:0.30,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.laranja,align:'center',valign:'middle',margin:0});
-  });
+  // Setas removidas por design
 
   // Zona 2 COMO RESOLVE
   s2.addShape(pres.ShapeType.rect,{x:Z2X,y:CY,w:Z2W,h:CH2,fill:{color:'FCFCFB'}});
@@ -223,13 +219,13 @@ function gerarPPTX(d, outPath) {
   s2.addText(d.z3_nota||'',{x:Z3X+0.16,y:CY+3.30,w:Z3W-0.22,h:0.60,fontFace:'Montserrat',fontSize:6.5,italic:true,color:'AAAAAA',valign:'top',margin:0,wrap:true});
 
   // Banner final
-  s2.addShape(pres.ShapeType.rect,{x:0,y:5.00,w:10,h:0.625,fill:{color:COR.dark}});
-  s2.addShape(pres.ShapeType.rect,{x:0,y:5.00,w:0.05,h:0.625,fill:{color:COR.laranja}});
+  s2.addShape(pres.ShapeType.rect,{x:0,y:5.20,w:10,h:0.425,fill:{color:COR.dark}});
+  s2.addShape(pres.ShapeType.rect,{x:0,y:5.20,w:0.05,h:0.425,fill:{color:COR.laranja}});
   s2.addText([
     {text:(d.s2_cta_bold||'')+'  ',options:{bold:true,color:COR.laranja}},
     {text:d.s2_cta_normal||'',options:{bold:false,color:COR.branco}}
-  ],{x:0.22,y:5.00,w:7.80,h:0.52,fontFace:'Montserrat',fontSize:9,valign:'middle',margin:0});
-  s2.addText('frota162.com.br',{x:8.20,y:5.10,w:1.65,h:0.32,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
+  ],{x:0.22,y:5.22,w:7.80,h:0.36,fontFace:'Montserrat',fontSize:8.5,valign:'middle',margin:0});
+  s2.addText('frota162.com.br',{x:8.20,y:5.26,w:1.65,h:0.28,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
 
   // ── SLIDE 3 — O custo de esperar ──────────────────────────────────────
   const s3 = pres.addSlide();
@@ -241,44 +237,48 @@ function gerarPPTX(d, outPath) {
   s3.addText(d.s3_formula||'',{x:0.38,y:1.04,w:9.3,h:0.20,fontFace:'Montserrat',fontSize:8,color:COR.cinza,italic:true,margin:0});
 
   const cm=d.custo_mensal||0;
-  const custodia = cm / 30;
-  const DIAS=[15,30,60,90], VALS=[cm/2,cm,cm*2,cm*3];
-  const BY=4.10, MH=2.20, BW=1.95, BG=0.30, X0=0.55;
+  // 6 barras: 10, 20, 30, 45, 60, 90 dias
+  const DIAS=[10,20,30,45,60,90];
+  const VALS=DIAS.map(d=>cm*(d/30));
+  const BY=3.90, MH=1.80, BW=1.40, BG=0.17, X0=0.35;
 
   DIAS.forEach((dia,i)=>{
     const bH=MH*(dia/90), bTop=BY-bH, bx=X0+i*(BW+BG);
     s3.addShape(pres.ShapeType.rect,{x:bx,y:bTop,w:BW,h:bH,fill:{color:'FFCDD2'},line:{color:COR.vermelho,width:0.5}});
-    s3.addText(`-R$${Math.round(VALS[i]).toLocaleString('pt-BR')}`,{x:bx,y:bTop-0.38,w:BW,h:0.34,fontFace:'Montserrat',fontSize:13,bold:true,color:COR.vermelho,align:'center',margin:0});
-    s3.addText(`${dia} DIAS`,{x:bx,y:BY+0.10,w:BW,h:0.26,fontFace:'Montserrat',fontSize:9,bold:true,color:'555555',align:'center',margin:0});
-    // Custo por dia abaixo de cada barra
-    if (custodia > 0) {
-      s3.addText(`-R$${Math.round(custodia).toLocaleString('pt-BR')}/dia`,{x:bx,y:BY+0.36,w:BW,h:0.22,fontFace:'Montserrat',fontSize:7.5,color:'888888',align:'center',margin:0});
-    }
+    s3.addText(`-R$${Math.round(VALS[i]).toLocaleString('pt-BR')}`,{x:bx,y:bTop-0.32,w:BW,h:0.28,fontFace:'Montserrat',fontSize:10,bold:true,color:COR.vermelho,align:'center',margin:0});
+    s3.addText(`${dia}d`,{x:bx,y:BY+0.08,w:BW,h:0.22,fontFace:'Montserrat',fontSize:8.5,bold:true,color:'555555',align:'center',margin:0});
   });
 
-  s3.addShape(pres.ShapeType.rect,{x:0.35,y:BY,w:9.30,h:0.016,fill:{color:'CCCCCC'}});
+  s3.addShape(pres.ShapeType.rect,{x:0.20,y:BY,w:9.60,h:0.014,fill:{color:'CCCCCC'}});
 
-  // Marcador de payback verde
+  // Payback — sempre posicionado no TOPO (y fixo = 1.32) para não sobrepor barras
   const inv=d.investimento_mensal_num||0;
   const dpCalc = (dp > 0) ? dp : (inv > 0 && cm > 0 ? Math.round(30*(inv/cm)) : 0);
-  if(dpCalc > 0 && dpCalc <= 90){
-    let bi=DIAS.findIndex(x=>x>=dpCalc); if(bi<0) bi=3;
-    const pbx=X0+bi*(BW+BG), pbH=MH*(DIAS[bi]/90), pbTop=BY-pbH;
-    s3.addShape(pres.ShapeType.rect,{x:pbx+0.12,y:pbTop-0.62,w:BW-0.24,h:0.38,fill:{color:COR.branco},line:{color:COR.verde,width:1.5}});
+  if(dpCalc > 0){
+    // Ancora na barra mais próxima
+    let bi=DIAS.findIndex(x=>x>=dpCalc); if(bi<0) bi=5;
+    const pbx=X0+bi*(BW+BG);
     const pbLabel = dpCalc<=45 ? `↑ Payback: ~${dpCalc} dias` : `↑ Payback: ~${Math.round(dpCalc/30)} meses`;
-    s3.addText(pbLabel,{x:pbx+0.12,y:pbTop-0.62,w:BW-0.24,h:0.38,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0});
-    // Linha tracejada do payback até a baseline
-    s3.addShape(pres.ShapeType.rect,{x:pbx+(BW/2)-0.008,y:pbTop-0.22,w:0.016,h:pbH+0.22,fill:{color:'BFE3BF'}});
+    // Posição fixa no topo — nunca sobrepõe barra
+    const PAYBACK_Y = 1.28;
+    s3.addShape(pres.ShapeType.rect,{x:pbx+0.08,y:PAYBACK_Y,w:BW-0.16,h:0.32,fill:{color:COR.branco},line:{color:COR.verde,width:1.5}});
+    s3.addText(pbLabel,{x:pbx+0.08,y:PAYBACK_Y,w:BW-0.16,h:0.32,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0});
+    // Linha verde do payback até a barra
+    const bHpb=MH*(DIAS[bi]/90), bToppb=BY-bHpb;
+    s3.addShape(pres.ShapeType.rect,{x:pbx+(BW/2)-0.007,y:PAYBACK_Y+0.32,w:0.014,h:Math.max(0,bToppb-(PAYBACK_Y+0.32)),fill:{color:'BFE3BF'}});
   }
 
-  s3.addText(d.s3_nota||'',{x:0.38,y:4.48,w:9.24,h:0.38,fontFace:'Montserrat',fontSize:6.5,italic:true,color:'AAAAAA',valign:'top',margin:0,wrap:true});
-  s3.addShape(pres.ShapeType.rect,{x:0,y:4.90,w:10,h:0.725,fill:{color:COR.dark}});
-  s3.addShape(pres.ShapeType.rect,{x:0,y:4.90,w:0.05,h:0.725,fill:{color:COR.laranja}});
+  // Nota metodológica — abaixo das labels, fora do gráfico
+  s3.addText(d.s3_nota||'',{x:0.35,y:4.22,w:9.30,h:0.28,fontFace:'Montserrat',fontSize:6,italic:true,color:'AAAAAA',valign:'top',margin:0,wrap:true});
+
+  // Footer padronizado — altura compacta
+  s3.addShape(pres.ShapeType.rect,{x:0,y:4.58,w:10,h:0.425,fill:{color:COR.dark}});
+  s3.addShape(pres.ShapeType.rect,{x:0,y:4.58,w:0.05,h:0.425,fill:{color:COR.laranja}});
   s3.addText([
     {text:'Decisão adiada não é decisão neutra.  ',options:{bold:true,color:COR.laranja}},
     {text:`R$${Math.round(cm).toLocaleString('pt-BR')} por mês continuam saindo do caixa — com ou sem contrato assinado.`,options:{bold:false,color:COR.branco}}
-  ],{x:0.22,y:4.92,w:7.80,h:0.52,fontFace:'Montserrat',fontSize:9.5,valign:'middle',margin:0});
-  s3.addText('frota162.com.br',{x:8.20,y:5.02,w:1.65,h:0.40,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
+  ],{x:0.22,y:4.60,w:7.80,h:0.36,fontFace:'Montserrat',fontSize:8.5,valign:'middle',margin:0});
+  s3.addText('frota162.com.br',{x:8.20,y:4.64,w:1.65,h:0.28,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
 
   return pres.writeFile({ fileName: outPath });
 }
