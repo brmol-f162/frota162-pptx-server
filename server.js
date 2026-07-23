@@ -42,7 +42,7 @@ const SYSTEM = `Você é especialista em vendas B2B da Frota162. Analise a trans
 
 TABELA DE PREÇOS (planos: Enterprise 1, Enterprise 2, Enterprise 3 — NUNCA outro nome): Até 40 placas mínimo E1 R$397 E2 R$549 E3 R$649. 41-99 E1 R$9,48 E2 R$14,23 E3 R$16,60. 100-199 E1 R$9,00 E2 R$13,51 E3 R$15,77. 200-299 E1 R$7,65 E2 R$11,49 E3 R$13,41. 300-399 E1 R$7,27 E2 R$10,91 E3 R$12,74. 400-499 E1 R$6,91 E2 R$10,37 E3 R$12,10. 500-999 E1 R$6,56 E2 R$9,85 E3 R$11,49. 1000-1999 E1 R$5,90 E2 R$8,86 E3 R$10,34. CNPJ adicional R$150/mês. Enterprise 1=multas+SNE+1CNPJ. Enterprise 2=E1+IPVA+indicação+3CNPJs. Enterprise 3=E2+CNH+tox+5CNPJs.
 
-ROI: economia_multas=multas_mes x valor x 0.4(SNE) ou 0.2. economia_NIC=NIC_tratadas x valor x 0.6. economia_pessoas=(func-1) x 2500. ROI_anual=economia_total_anual - investimento_anual. custo_mensal_base=multas_mes x 130 se sem ROI. payback=30 x (investimento_mes / custo_mensal). SEMPRE calcular dias_payback — usar custo_mensal_base quando sem ROI confirmado.
+ROI: economia_multas=multas_mes x valor x 0.4(SNE) ou 0.2. economia_NIC=NIC_tratadas x valor x 0.6. economia_pessoas=(func-1) x 2500. ROI_anual=economia_total_anual - investimento_anual. custo_mensal_base=multas_mes x 130 se sem ROI. payback = investimento_mensal / (ROI_anual / 12). SOMENTE calcular dias_payback quando tem_roi=true e ROI_anual > 0. Se tem_roi=false, definir dias_payback=0.
 
 LINGUAGEM: material apresentado pelo executivo Frota162 à diretoria do cliente. Use linguagem voltada ao cliente: "sua frota", "seu time", "sua operação". NÃO linguagem interna da Frota162.
 
@@ -220,12 +220,13 @@ function gerarPPTX(d, outPath) {
   s2.addShape(pres.ShapeType.rect,{x:Z3X+0.18,y:CY+1.82,w:Z3W-0.36,h:0.36,fill:{color:'D4EED4'},line:{color:'BFE3BF',width:0.5}});
   s2.addText(d.z3_badge||'',{x:Z3X+0.22,y:CY+1.82,w:Z3W-0.44,h:0.36,fontFace:'Montserrat',fontSize:7.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0,wrap:true});
 
-  // Payback na zona 3
+  // Payback na zona 3 — SOMENTE quando tem_roi=true e ROI confirmado na call
   const dp = d.dias_payback||0;
   const invN = d.investimento_mensal_num||0;
-  const cmN = d.custo_mensal||0;
-  const dpCalcS2 = dp>0 ? dp : (invN>0&&cmN>0 ? Math.round(30*(invN/cmN)) : 0);
-  if(dpCalcS2>0){
+  const roiAnualN = d.roi_anual||0;
+  const economiaMensalN = roiAnualN > 0 ? roiAnualN / 12 : 0;
+  const dpCalcS2 = d.tem_roi && roiAnualN > 0 && invN > 0 ? Math.round(invN / economiaMensalN * 30) : 0;
+  if(dpCalcS2 > 0 && dpCalcS2 <= 365){
     const pbLabelS2 = dpCalcS2<=45 ? `↑ Payback: ~${dpCalcS2} dias` : `↑ Payback: ~${Math.round(dpCalcS2/30)} meses`;
     s2.addShape(pres.ShapeType.rect,{x:Z3X+0.18,y:CY+2.28,w:Z3W-0.36,h:0.32,fill:{color:COR.branco},line:{color:COR.verde,width:1.0}});
     s2.addText(pbLabelS2,{x:Z3X+0.22,y:CY+2.28,w:Z3W-0.44,h:0.32,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0});
@@ -259,9 +260,11 @@ function gerarPPTX(d, outPath) {
   const VALS=DIAS.map(d=>cm*(d/30));
   const BY=4.52, MH=2.90, BW=1.35, BG=0.16, X0=0.30;
 
-  // Calcular payback
+  // Payback slide 3 — SOMENTE quando tem_roi=true e ROI confirmado
   const inv2=d.investimento_mensal_num||0;
-  const dpCalc = (dp>0) ? dp : (inv2>0&&cm>0 ? Math.round(30*(inv2/cm)) : 0);
+  const roiAnualS3 = d.roi_anual||0;
+  const economiaMensalS3 = roiAnualS3 > 0 ? roiAnualS3 / 12 : 0;
+  const dpCalc = (d.tem_roi && roiAnualS3 > 0 && inv2 > 0) ? Math.round(inv2 / economiaMensalS3 * 30) : 0;
 
   // Linha baseline
   s3.addShape(pres.ShapeType.rect,{x:0.20,y:BY,w:9.60,h:0.014,fill:{color:'CCCCCC'}});
