@@ -81,7 +81,7 @@ ROI: economia_multas=multas_mes x valor x 0.4(SNE) ou 0.2. economia_NIC=NIC_trat
 
 LINGUAGEM: material apresentado pelo executivo Frota162 à diretoria do cliente. Use linguagem voltada ao cliente: "sua frota", "seu time", "sua operação". NÃO linguagem interna da Frota162.
 
-REGRAS: valor mínimo multa R$130. sinal menos SÓ nas barras slide 3. tem_roi=false se call não confirmou. títulos máx 40 chars. z3_stat deve ser Enterprise 1, Enterprise 2 ou Enterprise 3 quando sem ROI — NUNCA nome inventado. headers provocativos e específicos para ESTE cliente.
+REGRAS: valor mínimo multa R$130. sinal menos SÓ nas barras slide 3. tem_roi=false se call não confirmou. títulos máx 40 chars. z3_stat deve ser Enterprise 1, Enterprise 2 ou Enterprise 3 quando sem ROI — NUNCA nome inventado. headers provocativos e específicos para ESTE cliente. NUNCA usar emojis em nenhum campo. z1_stat1 e z1_stat2 devem ser curtos max 12 chars ex: 'R$90k' '30%' '5.000+' nunca frases longas.
 
 TEMPERATURA: quente=lead engajado perguntas próximos passos decisor envolvido. morno=interesse sem comprometimento claro. frio=pouco engajamento objeções sem próximo passo.
 
@@ -234,14 +234,16 @@ function gerarPPTX(d, outPath) {
   s2.addText('HOJE',{x:Z1X+0.18,y:CY+0.16,w:Z1W-0.24,h:0.22,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.vermelho,charSpacing:1,margin:0});
 
   // Stat 1
-  s2.addText(d.z1_stat1||'',{x:Z1X+0.18,y:CY+0.42,w:Z1W-0.24,h:0.48,fontFace:'Montserrat',fontSize:26,bold:true,color:COR.vermelho,margin:0});
+  const z1s1Sz=(d.z1_stat1||'').length>10?15:(d.z1_stat1||'').length>6?20:26;
+  s2.addText(d.z1_stat1||'',{x:Z1X+0.18,y:CY+0.42,w:Z1W-0.24,h:0.48,fontFace:'Montserrat',fontSize:z1s1Sz,bold:true,color:COR.vermelho,margin:0,wrap:true});
   s2.addText(d.z1_sub1||'',{x:Z1X+0.18,y:CY+0.92,w:Z1W-0.24,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
 
   // Divisor
   s2.addShape(pres.ShapeType.rect,{x:Z1X+0.18,y:CY+1.28,w:Z1W-0.36,h:0.016,fill:{color:'F0B8A5'}});
 
   // Stat 2
-  s2.addText(d.z1_stat2||'',{x:Z1X+0.18,y:CY+1.34,w:Z1W-0.24,h:0.36,fontFace:'Montserrat',fontSize:18,bold:true,color:COR.vermelho,margin:0});
+  const z1s2Sz=(d.z1_stat2||'').length>10?12:(d.z1_stat2||'').length>6?15:18;
+  s2.addText(d.z1_stat2||'',{x:Z1X+0.18,y:CY+1.34,w:Z1W-0.24,h:0.36,fontFace:'Montserrat',fontSize:z1s2Sz,bold:true,color:COR.vermelho,margin:0,wrap:true});
   s2.addText(d.z1_sub2||'',{x:Z1X+0.18,y:CY+1.72,w:Z1W-0.24,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
 
   // Bullets — posição dinâmica com base no espaço restante
@@ -371,6 +373,20 @@ function gerarPPTX(d, outPath) {
   return pres.writeFile({ fileName: outPath });
 }
 
+// Remove emojis e chars especiais que quebram pptxgenjs
+function sanitize(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')
+    .replace(/[\u{2600}-\u{27BF}]/gu, '')
+    .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')
+    .replace(/[^\x00-\x7F\xC0-\u024F]/g, (c) => {
+      const code = c.charCodeAt(0);
+      return (code >= 0x00C0 && code <= 0x024F) ? c : '';
+    })
+    .replace(/\s+/g, ' ').trim();
+}
+
 app.get('/', (req, res) => res.json({ status: 'ok', service: 'Frota162 PPTX v5' }));
 
 app.post('/generate', (req, res) => {
@@ -382,6 +398,17 @@ app.post('/generate', (req, res) => {
       raw = raw.replace(/```json/gi,'').replace(/```/g,'').trim();
       const input = JSON.parse(raw);
       const { titulo, executivo, data_call, pasta_mes_id, call_id } = input;
+
+      // Filtro 0 — apenas calls de hoje (ignora calls de dias anteriores)
+      const dataCall = new Date(data_call || '');
+      const hoje = new Date();
+      const ehHoje = dataCall.getFullYear() === hoje.getFullYear() &&
+                     dataCall.getMonth() === hoje.getMonth() &&
+                     dataCall.getDate() === hoje.getDate();
+      if (data_call && !ehHoje) {
+        console.log('Descartado — call de dia anterior:', data_call, titulo);
+        return;
+      }
 
       // Filtro 1 — título deve conter "Frota162 ><" ou "Frota162 <>"
       const tituloLower = (titulo||'').toLowerCase();
@@ -429,7 +456,14 @@ app.post('/generate', (req, res) => {
       const nomeArq = `Frota162 >< ${empresa} (Diretoria).pptx`;
       const outPath = path.join(os.tmpdir(), nomeArq);
 
-      await gerarPPTX(d, outPath);
+      const sanitizeObj = (obj) => {
+        if (typeof obj === 'string') return sanitize(obj);
+        if (Array.isArray(obj)) return obj.map(sanitizeObj);
+        if (obj && typeof obj === 'object') { const r={}; for(const k of Object.keys(obj)) r[k]=sanitizeObj(obj[k]); return r; }
+        return obj;
+      };
+      const dClean = sanitizeObj(d);
+      await gerarPPTX(dClean, outPath);
 
       const auth = new google.auth.GoogleAuth({
         credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
