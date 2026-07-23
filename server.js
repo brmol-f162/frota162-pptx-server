@@ -40,18 +40,18 @@ function getSlackId(nomeOuEmail) {
 
 const SYSTEM = `Você é especialista em vendas B2B da Frota162. Analise a transcrição e retorne SOMENTE JSON válido sem markdown sem backticks.
 
-TABELA DE PREÇOS: Até 40 placas mínimo E1 R$397 E2 R$549 E3 R$649. 41-99 E1 R$9,48 E2 R$14,23 E3 R$16,60. 100-199 E1 R$9,00 E2 R$13,51 E3 R$15,77. 200-299 E1 R$7,65 E2 R$11,49 E3 R$13,41. 300-399 E1 R$7,27 E2 R$10,91 E3 R$12,74. 400-499 E1 R$6,91 E2 R$10,37 E3 R$12,10. 500-999 E1 R$6,56 E2 R$9,85 E3 R$11,49. 1000-1999 E1 R$5,90 E2 R$8,86 E3 R$10,34. CNPJ adicional R$150/mês. E1=multas+SNE+1CNPJ. E2=E1+IPVA+indicação+3CNPJs. E3=E2+CNH+tox+5CNPJs.
+TABELA DE PREÇOS (planos: Enterprise 1, Enterprise 2, Enterprise 3 — NUNCA outro nome): Até 40 placas mínimo E1 R$397 E2 R$549 E3 R$649. 41-99 E1 R$9,48 E2 R$14,23 E3 R$16,60. 100-199 E1 R$9,00 E2 R$13,51 E3 R$15,77. 200-299 E1 R$7,65 E2 R$11,49 E3 R$13,41. 300-399 E1 R$7,27 E2 R$10,91 E3 R$12,74. 400-499 E1 R$6,91 E2 R$10,37 E3 R$12,10. 500-999 E1 R$6,56 E2 R$9,85 E3 R$11,49. 1000-1999 E1 R$5,90 E2 R$8,86 E3 R$10,34. CNPJ adicional R$150/mês. Enterprise 1=multas+SNE+1CNPJ. Enterprise 2=E1+IPVA+indicação+3CNPJs. Enterprise 3=E2+CNH+tox+5CNPJs.
 
-ROI: economia_multas=multas_mes x valor x 0.4(SNE) ou 0.2. economia_NIC=NIC_tratadas x valor x 0.6. economia_pessoas=(func-1) x 2500. ROI_anual=economia_total_anual - investimento_anual. custo_mensal_base=multas_mes x 130 se sem ROI. payback=30 x (investimento_mes / custo_mensal).
+ROI: economia_multas=multas_mes x valor x 0.4(SNE) ou 0.2. economia_NIC=NIC_tratadas x valor x 0.6. economia_pessoas=(func-1) x 2500. ROI_anual=economia_total_anual - investimento_anual. custo_mensal_base=multas_mes x 130 se sem ROI. payback=30 x (investimento_mes / custo_mensal). SEMPRE calcular dias_payback — usar custo_mensal_base quando sem ROI confirmado.
 
-REGRAS: valor mínimo multa R$130. sinal menos SÓ nas barras slide 3. tem_roi=false se call não confirmou. títulos máx 40 chars. frases de impacto nos headers — provocativas para o decisor, não genéricas.
+LINGUAGEM: material apresentado pelo executivo Frota162 à diretoria do cliente. Use linguagem voltada ao cliente: "sua frota", "seu time", "sua operação". NÃO linguagem interna da Frota162.
 
-SLIDE 1 HEADER: deve ser uma frase provocativa e específica para ESTE cliente, como se o influenciador estivesse apresentando para o diretor. Ex: '213 veículos rodando sem visibilidade. Quem responde pela próxima multa de R$50k?' ou '80 multas por mês saindo do caixa sem controle. E o SNE nunca foi acionado.' NÃO usar frases genéricas.
+REGRAS: valor mínimo multa R$130. sinal menos SÓ nas barras slide 3. tem_roi=false se call não confirmou. títulos máx 40 chars. z3_stat deve ser Enterprise 1, Enterprise 2 ou Enterprise 3 quando sem ROI — NUNCA nome inventado. headers provocativos e específicos para ESTE cliente.
 
-TEMPERATURA: quente = lead engajado, fez perguntas, avançou para próximos passos, decisor envolvido. morno = interesse mas sem comprometimento claro. frio = pouco engajamento, muitas objeções, sem próximo passo definido.
+TEMPERATURA: quente=lead engajado perguntas próximos passos decisor envolvido. morno=interesse sem comprometimento claro. frio=pouco engajamento objeções sem próximo passo.
 
 JSON (todos obrigatórios):
-{"empresa":"","executivo":"","perfil_lead":"decisor ou influenciador","placas":0,"cnpjs":0,"segmento":"","tem_roi":true,"temperatura":"quente ou morno ou frio","roi_anual":0,"s1_header_bold":"frase provocativa específica para este cliente max 70 chars","s1_header_sub":"X placas · Y CNPJs · Região","s1_subtitulo":"contexto do segmento","cards":[{"stat":"","titulo":"max 40 chars","desc":"2-3 linhas com dado específico da call"},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""}],"s1_footer_bold":"urgência específica com número real max 80 chars","s1_footer_normal":"complemento","s2_header_bold":"Da dor de -R$X ao retorno de +R$Y por ano. OU X placas processo manual a recomendacao e o Plano N.","s2_header_normal":"Como a Frota162 resolve, em 3 passos — [Empresa]","z1_stat1":"","z1_sub1":"1 linha","z1_stat2":"","z1_sub2":"1 linha","z1_bullets":["dado específico 1","dado específico 2"],"passos":[{"titulo":"max 35 chars","desc":"1 linha específica"},{"titulo":"","desc":""},{"titulo":"","desc":""},{"titulo":"","desc":""}],"z3_stat":"ROI anual R$X ou Plano N","z3_sub1":"retorno por ano ou features","z3_investimento":"R$X,XX/mês","z3_badge":"diferencial específico para este cliente","z3_nota":"condições comerciais e limitações reais","s2_cta_bold":"próximo passo combinado na call","s2_cta_normal":"ação concreta","custo_mensal":0,"investimento_mensal_num":0,"dias_payback":0,"s3_header_bold":"Cada mês sem a Frota162 é R$X saindo do caixa da [Empresa].","s3_header_sub":"base confirmada na call","s3_formula":"fórmula usada","s3_nota":"metodologia e limitações","slack_resumo":"2 linhas objetivas: dor principal + alerta crucial","proximo_passo":"ação concreta para o executivo"}`;
+{"empresa":"","executivo":"","perfil_lead":"decisor ou influenciador","placas":0,"cnpjs":0,"segmento":"","tem_roi":true,"temperatura":"quente ou morno ou frio","roi_anual":0,"s1_header_bold":"frase provocativa específica max 70 chars","s1_header_sub":"X placas · Y CNPJs · Região","s1_subtitulo":"contexto segmento voltado ao cliente","cards":[{"stat":"","titulo":"max 40 chars","desc":"2-3 linhas específicas voltadas ao cliente"},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""}],"s1_footer_bold":"urgência específica com número real max 80 chars","s1_footer_normal":"complemento","s2_header_bold":"Da dor de -R$X ao retorno de +R$Y por ano. OU X placas sem visibilidade a recomendacao é o Enterprise N.","s2_header_normal":"Como a Frota162 resolve, em 3 passos — [Empresa]","z1_stat1":"","z1_sub1":"1 linha","z1_stat2":"","z1_sub2":"1 linha","z1_bullets":["dado específico 1","dado específico 2"],"passos":[{"titulo":"max 35 chars voltado ao cliente","desc":"1 linha no contexto do cliente"},{"titulo":"","desc":""},{"titulo":"","desc":""},{"titulo":"","desc":""}],"z3_stat":"ROI anual R$X OU Enterprise 1 OU Enterprise 2 OU Enterprise 3","z3_sub1":"retorno por ano ou features do plano","z3_investimento":"R$X,XX/mês","z3_badge":"diferencial específico para este cliente","z3_nota":"condições comerciais e limitações reais","s2_cta_bold":"próximo passo combinado na call","s2_cta_normal":"ação concreta","custo_mensal":0,"investimento_mensal_num":0,"dias_payback":0,"s3_header_bold":"Cada mês sem a Frota162 é R$X saindo do caixa da [Empresa].","s3_header_sub":"base confirmada na call","s3_formula":"fórmula usada","s3_nota":"metodologia e limitações","slack_resumo":"2 linhas objetivas SEM EMOJIS: dor principal + alerta crucial","proximo_passo":"ação concreta para o executivo"}`;
 
 function callClaude(text) {
   return new Promise((resolve, reject) => {
@@ -203,7 +203,9 @@ function gerarPPTX(d, outPath) {
   // Zona 3 RESULTADO
   s2.addShape(pres.ShapeType.rect,{x:Z3X,y:CY,w:Z3W,h:CH2,fill:{color:'EAF6EA'}});
   s2.addText(d.tem_roi?'RESULTADO':'PLANO RECOMENDADO',{x:Z3X+0.16,y:CY+0.16,w:Z3W-0.22,h:0.22,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.verde,charSpacing:1,margin:0});
-  s2.addText(d.z3_stat||'',{x:Z3X+0.16,y:CY+0.40,w:Z3W-0.22,h:0.46,fontFace:'Montserrat',fontSize:26,bold:true,color:COR.verde,margin:0});
+  // Ajusta fonte do z3_stat: planos (Enterprise N) têm texto mais longo
+  const z3FontSize = (d.z3_stat||'').length > 8 ? 16 : 26;
+  s2.addText(d.z3_stat||'',{x:Z3X+0.16,y:CY+0.40,w:Z3W-0.22,h:0.46,fontFace:'Montserrat',fontSize:z3FontSize,bold:true,color:COR.verde,margin:0,wrap:true});
   s2.addText(d.z3_sub1||'',{x:Z3X+0.16,y:CY+0.88,w:Z3W-0.22,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
   s2.addShape(pres.ShapeType.rect,{x:Z3X+0.16,y:CY+1.24,w:Z3W-0.32,h:0.016,fill:{color:'BFE3BF'}});
   s2.addText(d.z3_investimento||'',{x:Z3X+0.16,y:CY+1.30,w:Z3W-0.22,h:0.36,fontFace:'Montserrat',fontSize:16,bold:true,color:COR.verde,margin:0,wrap:true});
@@ -293,7 +295,13 @@ app.post('/generate', (req, res) => {
       const input = JSON.parse(raw);
       const { titulo, executivo, data_call, transcricao, pasta_mes_id } = input;
 
-      // Filtro de qualidade
+      // Filtro de qualidade — título deve conter "Frota162 ><" ou "Frota162 <>" (reunião com cliente)
+      const tituloLower = (titulo||'').toLowerCase();
+      const ehReuniaoCliente = tituloLower.includes('frota162 ><') || tituloLower.includes('frota162 <>') || tituloLower.includes('frota162><') || tituloLower.includes('frota162<>');
+      if (!ehReuniaoCliente) {
+        console.log('Descartado — não é reunião com cliente:', titulo);
+        return;
+      }
       if (!transcricao || transcricao.length < 500) {
         await postSlack(`:no_entry_sign: *Call descartada — ${titulo||'Sem título'}* (${executivo||''}): transcrição ausente ou muito curta para gerar material.`).catch(()=>{});
         return;
@@ -336,7 +344,7 @@ app.post('/generate', (req, res) => {
       const roiAnual = d.roi_anual || 0;
       const roiTexto = roiAnual > 0 ? `R$${Math.round(roiAnual).toLocaleString('pt-BR')}/ano` : 'A calcular';
 
-      const msg = `:car: *Novo material e análise estratégica* :rocket:\n*Empresa:* ${empresa}\n*Executivo:* ${execMencao}\n*Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n*ROI estimado:* ${roiTexto}\n*Link Material Estratégico:* <${uploaded.data.webViewLink}|Abrir PPTX>\n*Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n*Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+      const msg = `:car: *Novo material e análise estratégica* :rocket:\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
 
       await postSlack(msg);
 
