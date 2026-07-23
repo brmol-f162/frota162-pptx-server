@@ -336,6 +336,14 @@ app.post('/generate', (req, res) => {
       const conteudo = `Título: ${titulo||'Sem título'}\nData: ${data_call||''}\nExecutivo Frota162: ${executivo||''}\n\nTranscrição:\n${transcricao}`;
       const d = await callClaude(conteudo);
 
+      // Validação pós-Claude — descarta silenciosamente se campos essenciais estiverem vazios
+      const empresaValida = d.empresa && d.empresa !== 'Empresa Não Identificada' && d.empresa !== 'Não identificado' && d.empresa !== '';
+      const placasValidas = d.placas && d.placas > 0;
+      if (!empresaValida || !placasValidas) {
+        console.log('Descartado — campos insuficientes após análise Claude:', titulo, '| empresa:', d.empresa, '| placas:', d.placas);
+        return;
+      }
+
       const empresa = d.empresa || 'Prospect';
       const nomeArq = `Frota162 >< ${empresa} (Diretoria).pptx`;
       const outPath = path.join(os.tmpdir(), nomeArq);
