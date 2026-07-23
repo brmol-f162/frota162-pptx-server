@@ -399,14 +399,11 @@ app.post('/generate', (req, res) => {
       const input = JSON.parse(raw);
       const { titulo, executivo, data_call, pasta_mes_id, call_id } = input;
 
-      // Filtro 0 — apenas calls de hoje (ignora calls de dias anteriores)
-      const dataCall = new Date(data_call || '');
-      const hoje = new Date();
-      const ehHoje = dataCall.getFullYear() === hoje.getFullYear() &&
-                     dataCall.getMonth() === hoje.getMonth() &&
-                     dataCall.getDate() === hoje.getDate();
-      if (data_call && !ehHoje) {
-        console.log('Descartado — call de dia anterior:', data_call, titulo);
+      // Filtro 0 — apenas calls de hoje (compara string de data diretamente)
+      const hojeStr = new Date().toISOString().slice(0, 10); // "2026-07-23"
+      const dataCallStr = (data_call || '').slice(0, 10);    // "2026-07-23"
+      if (dataCallStr && dataCallStr !== hojeStr) {
+        console.log('Descartado — call de dia anterior:', dataCallStr, 'hoje:', hojeStr, titulo);
         return;
       }
 
