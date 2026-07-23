@@ -397,15 +397,32 @@ app.post('/generate', (req, res) => {
       let raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
       raw = raw.replace(/```json/gi,'').replace(/```/g,'').trim();
       const input = JSON.parse(raw);
-      const { titulo, executivo, data_call, pasta_mes_id, call_id } = input;
+      const { titulo, executivo, data_call, call_id } = input;
 
-      // Filtro 0 — apenas calls de hoje (compara string de data diretamente)
-      const hojeStr = new Date().toISOString().slice(0, 10); // "2026-07-23"
-      const dataCallStr = (data_call || '').slice(0, 10);    // "2026-07-23"
+      // Filtro 0 — apenas calls de hoje (horário de Brasília, sempre UTC-3)
+      const offsetBrasilia = 3 * 60; // minutos
+      const agoraBrasilia = new Date(Date.now() - offsetBrasilia * 60 * 1000);
+      const hojeStr = agoraBrasilia.toISOString().slice(0, 10); // "2026-07-23"
+
+      const parseDataBrasilia = (dateStr) => {
+        if (!dateStr) return null;
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return null;
+        return new Date(d.getTime() - offsetBrasilia * 60 * 1000);
+      };
+
+      const dataCallBrasilia = parseDataBrasilia(data_call);
+      const dataCallStr = dataCallBrasilia ? dataCallBrasilia.toISOString().slice(0, 10) : '';
+
       if (dataCallStr && dataCallStr !== hojeStr) {
         console.log('Descartado — call de dia anterior:', dataCallStr, 'hoje:', hojeStr, titulo);
         return;
       }
+
+      // Formata data para exibição no Slack
+      const dataCallFormatada = dataCallBrasilia
+        ? dataCallBrasilia.toISOString().slice(0, 16).replace('T', ' ')
+        : 'Data não informada';
 
       // Filtro 1 — título deve conter "Frota162 ><" ou "Frota162 <>"
       const tituloLower = (titulo||'').toLowerCase();
@@ -467,7 +484,7 @@ app.post('/generate', (req, res) => {
         scopes: ['https://www.googleapis.com/auth/drive'],
       });
       const drive = google.drive({ version: 'v3', auth });
-      const pastaId = pasta_mes_id || process.env.PASTA_RAIZ_ID;
+      const pastaId = process.env.PASTA_RAIZ_ID;
 
       const uploaded = await drive.files.create({
         supportsAllDrives: true,
@@ -493,7 +510,7 @@ app.post('/generate', (req, res) => {
       const roiAnual = d.roi_anual || 0;
       const roiTexto = roiAnual > 0 ? `R$${Math.round(roiAnual).toLocaleString('pt-BR')}/ano` : 'A calcular';
 
-      const dataHoraReuniao = data_call ? `${data_call}` : 'Data não informada';
+      const dataHoraReuniao = dataCallFormatada;
       const msg = `:car: *Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataHoraReuniao}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
 
       await postSlack(msg);
