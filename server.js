@@ -383,11 +383,20 @@ app.post('/generate', (req, res) => {
       const input = JSON.parse(raw);
       const { titulo, executivo, data_call, pasta_mes_id, call_id } = input;
 
-      // Filtro de qualidade — título deve conter "Frota162 ><" ou "Frota162 <>"
+      // Filtro 1 — título deve conter "Frota162 ><" ou "Frota162 <>"
       const tituloLower = (titulo||'').toLowerCase();
       const ehReuniaoCliente = tituloLower.includes('frota162 ><') || tituloLower.includes('frota162 <>') || tituloLower.includes('frota162><') || tituloLower.includes('frota162<>');
       if (!ehReuniaoCliente) {
         console.log('Descartado — não é reunião com cliente:', titulo);
+        return;
+      }
+
+      // Filtro 2 — apenas executivos autorizados
+      const EXECUTIVOS = ['palloma', 'julio', 'júlio', 'ravila', 'rávila', 'thais', 'william', 'willîam', 'bruno pereira'];
+      const execLower = (executivo||'').toLowerCase();
+      const ehExecutivoAutorizado = EXECUTIVOS.some(e => execLower.includes(e));
+      if (!ehExecutivoAutorizado) {
+        console.log('Descartado — executivo não autorizado:', executivo);
         return;
       }
 
