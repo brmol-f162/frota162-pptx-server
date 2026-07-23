@@ -114,21 +114,21 @@ function postSlack(msg) {
 
 function gerarPPTX(d, outPath) {
   const pres = new PptxGenJS();
-  pres.layout = 'LAYOUT_16x9'; // 10 x 5.625
+  pres.layout = 'LAYOUT_16x9'; // 10 x 5.625"
 
-  // ── SLIDE 1 — Dor em linguagem executiva ──────────────────────────────
+  // ── SLIDE 1 — A dor em linguagem executiva ────────────────────────────
   const s1 = pres.addSlide();
   s1.background = { color: 'F7F6F4' };
 
-  // Header laranja
-  s1.addShape(pres.ShapeType.rect, {x:0,y:0,w:10,h:1.00,fill:{color:COR.laranja}});
-  s1.addText(d.s1_header_bold||'', {x:0.38,y:0.06,w:9.3,h:0.55,fontFace:'Montserrat',fontSize:15,bold:true,color:COR.branco,valign:'middle',margin:0});
-  s1.addText(d.s1_header_sub||'', {x:0.38,y:0.62,w:9.3,h:0.28,fontFace:'Montserrat',fontSize:10,color:'FFD0C0',valign:'middle',margin:0});
-  s1.addText(d.s1_subtitulo||'', {x:0.38,y:1.02,w:9.3,h:0.20,fontFace:'Montserrat',fontSize:8,color:COR.cinza,italic:true,margin:0});
+  // Header laranja full-width
+  s1.addShape(pres.ShapeType.rect,{x:0,y:0,w:10,h:1.00,fill:{color:COR.laranja}});
+  s1.addText(d.s1_header_bold||'',{x:0.38,y:0.05,w:9.3,h:0.60,fontFace:'Montserrat',fontSize:14,bold:true,color:COR.branco,valign:'middle',margin:0,wrap:true});
+  s1.addText(d.s1_header_sub||'',{x:0.38,y:0.66,w:9.3,h:0.24,fontFace:'Montserrat',fontSize:9.5,color:'FFD0C0',valign:'middle',margin:0});
+  s1.addText(d.s1_subtitulo||'',{x:0.38,y:1.03,w:9.3,h:0.20,fontFace:'Montserrat',fontSize:8,italic:true,color:'888888',margin:0});
 
-  // 4 cards 2x2 — maiores e mais ricos
-  const CPOS=[{cx:0.20,cy:1.30},{cx:5.10,cy:1.30},{cx:0.20,cy:3.22},{cx:5.10,cy:3.22}];
-  const CW=4.70, CH=1.80;
+  // 4 cards 2x2
+  const CPOS=[{cx:0.22,cy:1.28},{cx:5.14,cy:1.28},{cx:0.22,cy:3.08},{cx:5.14,cy:3.08}];
+  const CW=4.60, CH=1.70;
   const CPAL=[
     {fundo:'FFF5F3',strip:COR.vermelho,stat:COR.vermelho},
     {fundo:'F0EFED',strip:'999999',stat:COR.dark},
@@ -140,145 +140,168 @@ function gerarPPTX(d, outPath) {
     const {cx,cy}=CPOS[i]; const p=CPAL[i];
     s1.addShape(pres.ShapeType.rect,{x:cx,y:cy,w:CW,h:CH,fill:{color:p.fundo},line:{color:COR.divisor,width:0.5}});
     s1.addShape(pres.ShapeType.rect,{x:cx,y:cy+0.14,w:0.05,h:CH-0.28,fill:{color:p.strip}});
-    // Stat
-    s1.addText(c.stat||'',{x:cx+0.16,y:cy+0.08,w:CW-0.24,h:0.46,fontFace:'Montserrat',fontSize:24,bold:true,color:p.stat,margin:0});
-    // Título
-    s1.addText(c.titulo||'',{x:cx+0.16,y:cy+0.54,w:CW-0.24,h:0.26,fontFace:'Montserrat',fontSize:9.5,bold:true,color:COR.dark,margin:0});
-    // Descrição — mais espaço
-    s1.addText(c.desc||'',{x:cx+0.16,y:cy+0.80,w:CW-0.24,h:0.92,fontFace:'Montserrat',fontSize:8,color:'333333',valign:'top',margin:0,wrap:true});
+    s1.addText(c.stat||'',{x:cx+0.16,y:cy+0.08,w:CW-0.24,h:0.42,fontFace:'Montserrat',fontSize:22,bold:true,color:p.stat,margin:0});
+    s1.addText(c.titulo||'',{x:cx+0.16,y:cy+0.50,w:CW-0.24,h:0.24,fontFace:'Montserrat',fontSize:9.5,bold:true,color:COR.dark,margin:0});
+    s1.addText(c.desc||'',{x:cx+0.16,y:cy+0.76,w:CW-0.24,h:0.87,fontFace:'Montserrat',fontSize:7.8,color:'333333',valign:'top',margin:0,wrap:true});
   });
 
-  // Footer dark
-  s1.addShape(pres.ShapeType.rect,{x:0,y:5.10,w:10,h:0.525,fill:{color:COR.dark}});
-  s1.addShape(pres.ShapeType.rect,{x:0,y:5.10,w:0.05,h:0.525,fill:{color:COR.laranja}});
+  // Footer dark slide 1
+  s1.addShape(pres.ShapeType.rect,{x:0,y:5.18,w:10,h:0.445,fill:{color:COR.dark}});
+  s1.addShape(pres.ShapeType.rect,{x:0,y:5.18,w:0.05,h:0.445,fill:{color:COR.laranja}});
   s1.addText([
     {text:(d.s1_footer_bold||'')+' ',options:{bold:true,color:COR.laranja}},
     {text:d.s1_footer_normal||'',options:{bold:false,color:COR.branco}}
-  ],{x:0.22,y:5.12,w:7.80,h:0.44,fontFace:'Montserrat',fontSize:9.5,valign:'middle',margin:0});
-  s1.addText('frota162.com.br',{x:8.20,y:5.18,w:1.65,h:0.32,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
+  ],{x:0.22,y:5.20,w:7.80,h:0.38,fontFace:'Montserrat',fontSize:9,valign:'middle',margin:0});
+  s1.addText('frota162.com.br',{x:8.20,y:5.24,w:1.65,h:0.28,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
 
-  // ── SLIDE 2 — 3 Zonas ─────────────────────────────────────────────────
+  // ── SLIDE 2 — 3 Zonas (HOJE → COMO RESOLVE → RESULTADO) ─────────────
   const s2 = pres.addSlide();
   s2.background = { color: 'F7F6F4' };
 
+  // Header dark
   s2.addShape(pres.ShapeType.rect,{x:0,y:0,w:10,h:0.84,fill:{color:COR.dark}});
   s2.addShape(pres.ShapeType.rect,{x:0,y:0,w:0.05,h:0.84,fill:{color:COR.laranja}});
-  s2.addText(d.s2_header_bold||'',{x:0.22,y:0.04,w:9.3,h:0.44,fontFace:'Montserrat',fontSize:12,bold:true,color:COR.laranja,valign:'middle',margin:0,wrap:true});
-  s2.addText(d.s2_header_normal||'',{x:0.22,y:0.50,w:9.3,h:0.28,fontFace:'Montserrat',fontSize:9,color:COR.branco,valign:'middle',margin:0});
+  s2.addText(d.s2_header_bold||'',{x:0.22,y:0.04,w:9.4,h:0.42,fontFace:'Montserrat',fontSize:12,bold:true,color:COR.laranja,valign:'middle',margin:0,wrap:true});
+  s2.addText(d.s2_header_normal||'',{x:0.22,y:0.50,w:9.4,h:0.26,fontFace:'Montserrat',fontSize:8.5,color:COR.branco,valign:'middle',margin:0});
 
-  const CY=0.84, CH2=4.16;
-  const Z1X=0,Z1W=3.10,Z2X=3.10,Z2W=3.80,Z3X=6.90,Z3W=3.10;
+  const CY=0.84, CH2=4.34; // termina em y=5.18
+  const Z1X=0, Z1W=3.10, Z2X=3.10, Z2W=3.80, Z3X=6.90, Z3W=3.10;
 
-  // Zona 1 HOJE
+  // ZONA 1 — HOJE (vermelho claro)
   s2.addShape(pres.ShapeType.rect,{x:Z1X,y:CY,w:Z1W,h:CH2,fill:{color:'FFEDE7'}});
-  s2.addText('HOJE',{x:Z1X+0.16,y:CY+0.16,w:Z1W-0.22,h:0.22,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.vermelho,charSpacing:1,margin:0});
-  s2.addText(d.z1_stat1||'',{x:Z1X+0.16,y:CY+0.40,w:Z1W-0.22,h:0.46,fontFace:'Montserrat',fontSize:26,bold:true,color:COR.vermelho,margin:0});
-  s2.addText(d.z1_sub1||'',{x:Z1X+0.16,y:CY+0.88,w:Z1W-0.22,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
-  s2.addShape(pres.ShapeType.rect,{x:Z1X+0.16,y:CY+1.24,w:Z1W-0.32,h:0.016,fill:{color:'F0B8A5'}});
-  s2.addText(d.z1_stat2||'',{x:Z1X+0.16,y:CY+1.30,w:Z1W-0.22,h:0.36,fontFace:'Montserrat',fontSize:18,bold:true,color:COR.vermelho,margin:0});
-  s2.addText(d.z1_sub2||'',{x:Z1X+0.16,y:CY+1.70,w:Z1W-0.22,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
+  s2.addText('HOJE',{x:Z1X+0.18,y:CY+0.16,w:Z1W-0.24,h:0.22,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.vermelho,charSpacing:1,margin:0});
+
+  // Stat 1
+  s2.addText(d.z1_stat1||'',{x:Z1X+0.18,y:CY+0.42,w:Z1W-0.24,h:0.48,fontFace:'Montserrat',fontSize:26,bold:true,color:COR.vermelho,margin:0});
+  s2.addText(d.z1_sub1||'',{x:Z1X+0.18,y:CY+0.92,w:Z1W-0.24,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
+
+  // Divisor
+  s2.addShape(pres.ShapeType.rect,{x:Z1X+0.18,y:CY+1.28,w:Z1W-0.36,h:0.016,fill:{color:'F0B8A5'}});
+
+  // Stat 2
+  s2.addText(d.z1_stat2||'',{x:Z1X+0.18,y:CY+1.34,w:Z1W-0.24,h:0.36,fontFace:'Montserrat',fontSize:18,bold:true,color:COR.vermelho,margin:0});
+  s2.addText(d.z1_sub2||'',{x:Z1X+0.18,y:CY+1.72,w:Z1W-0.24,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
+
+  // Bullets — posição dinâmica com base no espaço restante
+  const bulletY = CY + 2.10;
   (d.z1_bullets||[]).forEach((b,i)=>{
-    s2.addText('· '+b,{x:Z1X+0.16,y:CY+2.10+(i*0.28),w:Z1W-0.22,h:0.26,fontFace:'Montserrat',fontSize:7.5,color:'444444',margin:0,wrap:true});
+    s2.addText('· '+b,{x:Z1X+0.18,y:bulletY+(i*0.30),w:Z1W-0.24,h:0.28,fontFace:'Montserrat',fontSize:7.5,color:'444444',margin:0,wrap:true});
   });
 
-  // Setas removidas por design
-
-  // Zona 2 COMO RESOLVE
+  // ZONA 2 — COMO A FROTA162 RESOLVE (quase branco)
   s2.addShape(pres.ShapeType.rect,{x:Z2X,y:CY,w:Z2W,h:CH2,fill:{color:'FCFCFB'}});
-  s2.addText('COMO A FROTA162 RESOLVE',{x:Z2X+0.16,y:CY+0.16,w:Z2W-0.22,h:0.22,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.dark,charSpacing:0.5,margin:0});
-  const SY=CY+0.50,SH=0.72,SG=0.12,rx=Z2X+0.36;
-  s2.addShape(pres.ShapeType.rect,{x:rx+0.16,y:SY+0.20,w:0.016,h:(SH+SG)*3+0.20,fill:{color:COR.divisor}});
+  s2.addText('COMO A FROTA162 RESOLVE',{x:Z2X+0.18,y:CY+0.16,w:Z2W-0.24,h:0.22,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.dark,charSpacing:0.5,margin:0});
+
+  // Rail vertical + 4 passos numerados
+  const SY=CY+0.52, SH=0.74, SG=0.10, rx=Z2X+0.34;
+  const railH = (SH+SG)*3 + SH;
+  s2.addShape(pres.ShapeType.rect,{x:rx+0.15,y:SY+0.19,w:0.014,h:railH-0.10,fill:{color:COR.divisor}});
+
   (d.passos||[]).forEach((p,i)=>{
     const py=SY+i*(SH+SG);
-    s2.addShape(pres.ShapeType.ellipse,{x:rx,y:py+0.06,w:0.38,h:0.38,fill:{color:COR.laranja}});
-    s2.addText(String(i+1),{x:rx,y:py+0.06,w:0.38,h:0.38,fontFace:'Montserrat',fontSize:11,bold:true,color:COR.branco,align:'center',valign:'middle',margin:0});
-    s2.addText(p.titulo||'',{x:Z2X+0.82,y:py+0.06,w:Z2W-0.94,h:0.28,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.dark,margin:0,wrap:true});
-    s2.addText(p.desc||'',{x:Z2X+0.82,y:py+0.36,w:Z2W-0.94,h:0.34,fontFace:'Montserrat',fontSize:8,color:'555555',valign:'top',margin:0,wrap:true});
+    s2.addShape(pres.ShapeType.ellipse,{x:rx,y:py+0.05,w:0.38,h:0.38,fill:{color:COR.laranja}});
+    s2.addText(String(i+1),{x:rx,y:py+0.05,w:0.38,h:0.38,fontFace:'Montserrat',fontSize:11,bold:true,color:COR.branco,align:'center',valign:'middle',margin:0});
+    s2.addText(p.titulo||'',{x:Z2X+0.82,y:py+0.05,w:Z2W-0.98,h:0.28,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.dark,margin:0,wrap:true});
+    s2.addText(p.desc||'',{x:Z2X+0.82,y:py+0.34,w:Z2W-0.98,h:0.36,fontFace:'Montserrat',fontSize:8,color:'555555',valign:'top',margin:0,wrap:true});
   });
 
-  // Zona 3 RESULTADO
+  // ZONA 3 — RESULTADO / PLANO RECOMENDADO (verde claro)
   s2.addShape(pres.ShapeType.rect,{x:Z3X,y:CY,w:Z3W,h:CH2,fill:{color:'EAF6EA'}});
-  s2.addText(d.tem_roi?'RESULTADO':'PLANO RECOMENDADO',{x:Z3X+0.16,y:CY+0.16,w:Z3W-0.22,h:0.22,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.verde,charSpacing:1,margin:0});
-  // Ajusta fonte do z3_stat: planos (Enterprise N) têm texto mais longo
-  const z3FontSize = (d.z3_stat||'').length > 8 ? 16 : 26;
-  s2.addText(d.z3_stat||'',{x:Z3X+0.16,y:CY+0.40,w:Z3W-0.22,h:0.46,fontFace:'Montserrat',fontSize:z3FontSize,bold:true,color:COR.verde,margin:0,wrap:true});
-  s2.addText(d.z3_sub1||'',{x:Z3X+0.16,y:CY+0.88,w:Z3W-0.22,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
-  s2.addShape(pres.ShapeType.rect,{x:Z3X+0.16,y:CY+1.24,w:Z3W-0.32,h:0.016,fill:{color:'BFE3BF'}});
-  s2.addText(d.z3_investimento||'',{x:Z3X+0.16,y:CY+1.30,w:Z3W-0.22,h:0.36,fontFace:'Montserrat',fontSize:16,bold:true,color:COR.verde,margin:0,wrap:true});
-  s2.addShape(pres.ShapeType.rect,{x:Z3X+0.16,y:CY+1.80,w:Z3W-0.32,h:0.38,fill:{color:'D4EED4'},line:{color:'BFE3BF',width:0.5}});
-  s2.addText(d.z3_badge||'',{x:Z3X+0.20,y:CY+1.80,w:Z3W-0.40,h:0.38,fontFace:'Montserrat',fontSize:7.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0,wrap:true});
+  s2.addText(d.tem_roi?'RESULTADO':'PLANO RECOMENDADO',{x:Z3X+0.18,y:CY+0.16,w:Z3W-0.24,h:0.22,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.verde,charSpacing:1,margin:0});
 
-  // Payback na Zona 3 se disponível
+  // z3_stat — fonte adaptativa
+  const z3Sz = (d.z3_stat||'').length > 8 ? 16 : 26;
+  s2.addText(d.z3_stat||'',{x:Z3X+0.18,y:CY+0.40,w:Z3W-0.24,h:0.50,fontFace:'Montserrat',fontSize:z3Sz,bold:true,color:COR.verde,margin:0,wrap:true});
+  s2.addText(d.z3_sub1||'',{x:Z3X+0.18,y:CY+0.92,w:Z3W-0.24,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
+  s2.addShape(pres.ShapeType.rect,{x:Z3X+0.18,y:CY+1.28,w:Z3W-0.36,h:0.016,fill:{color:'BFE3BF'}});
+  s2.addText(d.z3_investimento||'',{x:Z3X+0.18,y:CY+1.34,w:Z3W-0.24,h:0.36,fontFace:'Montserrat',fontSize:16,bold:true,color:COR.verde,margin:0,wrap:true});
+
+  // Badge diferencial
+  s2.addShape(pres.ShapeType.rect,{x:Z3X+0.18,y:CY+1.82,w:Z3W-0.36,h:0.36,fill:{color:'D4EED4'},line:{color:'BFE3BF',width:0.5}});
+  s2.addText(d.z3_badge||'',{x:Z3X+0.22,y:CY+1.82,w:Z3W-0.44,h:0.36,fontFace:'Montserrat',fontSize:7.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0,wrap:true});
+
+  // Payback na zona 3
   const dp = d.dias_payback||0;
-  if (dp > 0 && dp <= 90) {
-    const pbLabel = dp <= 45 ? `Payback em ~${dp} dias` : `Payback em ~${Math.round(dp/30)} meses`;
-    s2.addShape(pres.ShapeType.rect,{x:Z3X+0.16,y:CY+2.28,w:Z3W-0.32,h:0.38,fill:{color:'FFFFFF'},line:{color:COR.verde,width:1.0}});
-    s2.addText(`↑ ${pbLabel}`,{x:Z3X+0.20,y:CY+2.28,w:Z3W-0.40,h:0.38,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0});
+  const invN = d.investimento_mensal_num||0;
+  const cmN = d.custo_mensal||0;
+  const dpCalcS2 = dp>0 ? dp : (invN>0&&cmN>0 ? Math.round(30*(invN/cmN)) : 0);
+  if(dpCalcS2>0){
+    const pbLabelS2 = dpCalcS2<=45 ? `↑ Payback: ~${dpCalcS2} dias` : `↑ Payback: ~${Math.round(dpCalcS2/30)} meses`;
+    s2.addShape(pres.ShapeType.rect,{x:Z3X+0.18,y:CY+2.28,w:Z3W-0.36,h:0.32,fill:{color:COR.branco},line:{color:COR.verde,width:1.0}});
+    s2.addText(pbLabelS2,{x:Z3X+0.22,y:CY+2.28,w:Z3W-0.44,h:0.32,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0});
   }
 
-  s2.addText(d.z3_nota||'',{x:Z3X+0.16,y:CY+3.30,w:Z3W-0.22,h:0.60,fontFace:'Montserrat',fontSize:6.5,italic:true,color:'AAAAAA',valign:'top',margin:0,wrap:true});
+  // Nota rodapé zona 3
+  s2.addText(d.z3_nota||'',{x:Z3X+0.18,y:CY+3.50,w:Z3W-0.24,h:0.60,fontFace:'Montserrat',fontSize:6.5,italic:true,color:'AAAAAA',valign:'top',margin:0,wrap:true});
 
-  // Banner final
-  s2.addShape(pres.ShapeType.rect,{x:0,y:5.20,w:10,h:0.425,fill:{color:COR.dark}});
-  s2.addShape(pres.ShapeType.rect,{x:0,y:5.20,w:0.05,h:0.425,fill:{color:COR.laranja}});
+  // Footer dark slide 2 — mesmo padrão slide 1
+  s2.addShape(pres.ShapeType.rect,{x:0,y:5.18,w:10,h:0.445,fill:{color:COR.dark}});
+  s2.addShape(pres.ShapeType.rect,{x:0,y:5.18,w:0.05,h:0.445,fill:{color:COR.laranja}});
   s2.addText([
     {text:(d.s2_cta_bold||'')+'  ',options:{bold:true,color:COR.laranja}},
     {text:d.s2_cta_normal||'',options:{bold:false,color:COR.branco}}
-  ],{x:0.22,y:5.22,w:7.80,h:0.36,fontFace:'Montserrat',fontSize:8.5,valign:'middle',margin:0});
-  s2.addText('frota162.com.br',{x:8.20,y:5.26,w:1.65,h:0.28,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
+  ],{x:0.22,y:5.20,w:7.80,h:0.38,fontFace:'Montserrat',fontSize:8.5,valign:'middle',margin:0});
+  s2.addText('frota162.com.br',{x:8.20,y:5.24,w:1.65,h:0.28,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
 
   // ── SLIDE 3 — O custo de esperar ──────────────────────────────────────
   const s3 = pres.addSlide();
   s3.background = { color: 'F7F6F4' };
 
+  // Header laranja
   s3.addShape(pres.ShapeType.rect,{x:0,y:0,w:10,h:1.00,fill:{color:COR.laranja}});
-  s3.addText(d.s3_header_bold||'',{x:0.38,y:0.06,w:9.3,h:0.56,fontFace:'Montserrat',fontSize:15,bold:true,color:COR.branco,valign:'middle',margin:0,wrap:true});
-  s3.addText(d.s3_header_sub||'',{x:0.38,y:0.64,w:9.3,h:0.26,fontFace:'Montserrat',fontSize:9.5,color:'FFD0C0',valign:'middle',margin:0});
-  s3.addText(d.s3_formula||'',{x:0.38,y:1.04,w:9.3,h:0.20,fontFace:'Montserrat',fontSize:8,color:COR.cinza,italic:true,margin:0});
+  s3.addText(d.s3_header_bold||'',{x:0.38,y:0.05,w:9.3,h:0.58,fontFace:'Montserrat',fontSize:14,bold:true,color:COR.branco,valign:'middle',margin:0,wrap:true});
+  s3.addText(d.s3_header_sub||'',{x:0.38,y:0.65,w:9.3,h:0.24,fontFace:'Montserrat',fontSize:9,color:'FFD0C0',valign:'middle',margin:0});
+  s3.addText(d.s3_formula||'',{x:0.38,y:1.02,w:9.3,h:0.20,fontFace:'Montserrat',fontSize:7.5,italic:true,color:'888888',margin:0,wrap:true});
 
-  const cm=d.custo_mensal||0;
   // 6 barras: 10, 20, 30, 45, 60, 90 dias
+  const cm = d.custo_mensal||0;
   const DIAS=[10,20,30,45,60,90];
   const VALS=DIAS.map(d=>cm*(d/30));
-  const BY=3.90, MH=1.80, BW=1.40, BG=0.17, X0=0.35;
+  const BY=4.52, MH=2.90, BW=1.35, BG=0.16, X0=0.30;
 
-  DIAS.forEach((dia,i)=>{
-    const bH=MH*(dia/90), bTop=BY-bH, bx=X0+i*(BW+BG);
-    s3.addShape(pres.ShapeType.rect,{x:bx,y:bTop,w:BW,h:bH,fill:{color:'FFCDD2'},line:{color:COR.vermelho,width:0.5}});
-    s3.addText(`-R$${Math.round(VALS[i]).toLocaleString('pt-BR')}`,{x:bx,y:bTop-0.32,w:BW,h:0.28,fontFace:'Montserrat',fontSize:10,bold:true,color:COR.vermelho,align:'center',margin:0});
-    s3.addText(`${dia}d`,{x:bx,y:BY+0.08,w:BW,h:0.22,fontFace:'Montserrat',fontSize:8.5,bold:true,color:'555555',align:'center',margin:0});
-  });
+  // Calcular payback
+  const inv2=d.investimento_mensal_num||0;
+  const dpCalc = (dp>0) ? dp : (inv2>0&&cm>0 ? Math.round(30*(inv2/cm)) : 0);
 
+  // Linha baseline
   s3.addShape(pres.ShapeType.rect,{x:0.20,y:BY,w:9.60,h:0.014,fill:{color:'CCCCCC'}});
 
-  // Payback — sempre posicionado no TOPO (y fixo = 1.32) para não sobrepor barras
-  const inv=d.investimento_mensal_num||0;
-  const dpCalc = (dp > 0) ? dp : (inv > 0 && cm > 0 ? Math.round(30*(inv/cm)) : 0);
-  if(dpCalc > 0){
-    // Ancora na barra mais próxima
-    let bi=DIAS.findIndex(x=>x>=dpCalc); if(bi<0) bi=5;
-    const pbx=X0+bi*(BW+BG);
+  // Payback — posição fixa no topo (y=1.28), nunca sobrepõe barras
+  let paybackBi = -1;
+  if(dpCalc>0){
+    paybackBi = DIAS.findIndex(x=>x>=dpCalc); if(paybackBi<0) paybackBi=5;
+    const pbx=X0+paybackBi*(BW+BG);
     const pbLabel = dpCalc<=45 ? `↑ Payback: ~${dpCalc} dias` : `↑ Payback: ~${Math.round(dpCalc/30)} meses`;
-    // Posição fixa no topo — nunca sobrepõe barra
     const PAYBACK_Y = 1.28;
-    s3.addShape(pres.ShapeType.rect,{x:pbx+0.08,y:PAYBACK_Y,w:BW-0.16,h:0.32,fill:{color:COR.branco},line:{color:COR.verde,width:1.5}});
-    s3.addText(pbLabel,{x:pbx+0.08,y:PAYBACK_Y,w:BW-0.16,h:0.32,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0});
-    // Linha verde do payback até a barra
-    const bHpb=MH*(DIAS[bi]/90), bToppb=BY-bHpb;
-    s3.addShape(pres.ShapeType.rect,{x:pbx+(BW/2)-0.007,y:PAYBACK_Y+0.32,w:0.014,h:Math.max(0,bToppb-(PAYBACK_Y+0.32)),fill:{color:'BFE3BF'}});
+    s3.addShape(pres.ShapeType.rect,{x:pbx+0.06,y:PAYBACK_Y,w:BW-0.12,h:0.32,fill:{color:COR.branco},line:{color:COR.verde,width:1.5}});
+    s3.addText(pbLabel,{x:pbx+0.06,y:PAYBACK_Y,w:BW-0.12,h:0.32,fontFace:'Montserrat',fontSize:7.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0});
+    // Linha tracejada do payback até a barra
+    const bHpb=MH*(DIAS[paybackBi]/90), bToppb=BY-bHpb;
+    const lineStart = PAYBACK_Y+0.32;
+    const lineHeight = Math.max(0, bToppb - lineStart);
+    if(lineHeight>0) s3.addShape(pres.ShapeType.rect,{x:pbx+(BW/2)-0.007,y:lineStart,w:0.014,h:lineHeight,fill:{color:'BFE3BF'}});
   }
 
-  // Nota metodológica — abaixo das labels, fora do gráfico
-  s3.addText(d.s3_nota||'',{x:0.35,y:4.22,w:9.30,h:0.28,fontFace:'Montserrat',fontSize:6,italic:true,color:'AAAAAA',valign:'top',margin:0,wrap:true});
+  // Barras
+  DIAS.forEach((dia,i)=>{
+    const bH=MH*(dia/90), bTop=BY-bH, bx=X0+i*(BW+BG);
+    const isPayback = (i===paybackBi);
+    s3.addShape(pres.ShapeType.rect,{x:bx,y:bTop,w:BW,h:bH,fill:{color:isPayback?'FFB3B3':'FFCDD2'},line:{color:COR.vermelho,width:0.5}});
+    s3.addText(`-R$${Math.round(VALS[i]).toLocaleString('pt-BR')}`,{x:bx,y:bTop-0.30,w:BW,h:0.26,fontFace:'Montserrat',fontSize:9.5,bold:true,color:COR.vermelho,align:'center',margin:0});
+    s3.addText(`${dia}d`,{x:bx,y:BY+0.06,w:BW,h:0.22,fontFace:'Montserrat',fontSize:8,bold:true,color:'555555',align:'center',margin:0});
+  });
 
-  // Footer padronizado — altura compacta
-  s3.addShape(pres.ShapeType.rect,{x:0,y:4.58,w:10,h:0.425,fill:{color:COR.dark}});
-  s3.addShape(pres.ShapeType.rect,{x:0,y:4.58,w:0.05,h:0.425,fill:{color:COR.laranja}});
+  // Nota — abaixo das labels
+  s3.addText(d.s3_nota||'',{x:0.30,y:4.84,w:9.40,h:0.24,fontFace:'Montserrat',fontSize:6,italic:true,color:'AAAAAA',valign:'top',margin:0,wrap:true});
+
+  // Footer dark slide 3 — FIXO no rodapé (y=5.18)
+  s3.addShape(pres.ShapeType.rect,{x:0,y:5.18,w:10,h:0.445,fill:{color:COR.dark}});
+  s3.addShape(pres.ShapeType.rect,{x:0,y:5.18,w:0.05,h:0.445,fill:{color:COR.laranja}});
   s3.addText([
     {text:'Decisão adiada não é decisão neutra.  ',options:{bold:true,color:COR.laranja}},
     {text:`R$${Math.round(cm).toLocaleString('pt-BR')} por mês continuam saindo do caixa — com ou sem contrato assinado.`,options:{bold:false,color:COR.branco}}
-  ],{x:0.22,y:4.60,w:7.80,h:0.36,fontFace:'Montserrat',fontSize:8.5,valign:'middle',margin:0});
-  s3.addText('frota162.com.br',{x:8.20,y:4.64,w:1.65,h:0.28,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
+  ],{x:0.22,y:5.20,w:7.80,h:0.38,fontFace:'Montserrat',fontSize:8.5,valign:'middle',margin:0});
+  s3.addText('frota162.com.br',{x:8.20,y:5.24,w:1.65,h:0.28,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
 
   return pres.writeFile({ fileName: outPath });
 }
@@ -344,7 +367,7 @@ app.post('/generate', (req, res) => {
       const roiAnual = d.roi_anual || 0;
       const roiTexto = roiAnual > 0 ? `R$${Math.round(roiAnual).toLocaleString('pt-BR')}/ano` : 'A calcular';
 
-      const msg = `:car: *Novo material e análise estratégica* :rocket:\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+      const msg = `:car: *Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
 
       await postSlack(msg);
 
