@@ -134,8 +134,8 @@ function callClaude(text) {
   });
 }
 
-function fetchTranscricao(callId) {
-  return new Promise((resolve, reject) => {
+function fetchCallData(callId) {
+  return new Promise((resolve) => {
     const req = https.request({
       hostname: 'api.elephan.dev',
       path: `/v1/transcribes/${callId}`,
@@ -150,13 +150,16 @@ function fetchTranscricao(callId) {
       res.on('end', () => {
         try {
           const p = JSON.parse(data);
-          const texto = p.data?.transcript?.text || p.transcript?.text || p.data?.content || '';
-          resolve(texto);
-        } catch(e) { resolve(''); }
+          const obj = p.data || p;
+          const texto = obj?.transcript?.text || obj?.content || '';
+          // Data real da call — tenta vários campos, prioriza ISO
+          const dataRaw = obj?.created_at || obj?.createdAt || obj?.date || obj?.dateIncluded || '';
+          resolve({ texto, dataRaw });
+        } catch(e) { resolve({ texto:'', dataRaw:'' }); }
       });
     });
-    req.on('error', () => resolve(''));
-    req.setTimeout(30000, () => { req.destroy(); resolve(''); });
+    req.on('error', () => resolve({ texto:'', dataRaw:'' }));
+    req.setTimeout(30000, () => { req.destroy(); resolve({ texto:'', dataRaw:'' }); });
     req.end();
   });
 }
@@ -397,32 +400,7 @@ app.post('/generate', (req, res) => {
       let raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
       raw = raw.replace(/```json/gi,'').replace(/```/g,'').trim();
       const input = JSON.parse(raw);
-      const { titulo, executivo, data_call, call_id } = input;
-
-      // Filtro 0 — apenas calls de hoje (horário de Brasília, sempre UTC-3)
-      const offsetBrasilia = 3 * 60; // minutos
-      const agoraBrasilia = new Date(Date.now() - offsetBrasilia * 60 * 1000);
-      const hojeStr = agoraBrasilia.toISOString().slice(0, 10); // "2026-07-23"
-
-      const parseDataBrasilia = (dateStr) => {
-        if (!dateStr) return null;
-        const d = new Date(dateStr);
-        if (isNaN(d.getTime())) return null;
-        return new Date(d.getTime() - offsetBrasilia * 60 * 1000);
-      };
-
-      const dataCallBrasilia = parseDataBrasilia(data_call);
-      const dataCallStr = dataCallBrasilia ? dataCallBrasilia.toISOString().slice(0, 10) : '';
-
-      if (dataCallStr && dataCallStr !== hojeStr) {
-        console.log('Descartado — call de dia anterior:', dataCallStr, 'hoje:', hojeStr, titulo);
-        return;
-      }
-
-      // Formata data para exibição no Slack
-      const dataCallFormatada = dataCallBrasilia
-        ? dataCallBrasilia.toISOString().slice(0, 16).replace('T', ' ')
-        : 'Data não informada';
+      const { titulo, executivo, call_id } = input;
 
       // Filtro 1 — título deve conter "Frota162 ><" ou "Frota162 <>"
       const tituloLower = (titulo||'').toLowerCase();
@@ -441,21 +419,50 @@ app.post('/generate', (req, res) => {
         return;
       }
 
-      // Busca transcrição diretamente no Elephan pelo call_id
-      const transcricao = await fetchTranscricao(call_id);
-      if (!transcricao || transcricao.length < 500) {
-        await postSlack(`:no_entry_sign: *Call descartada — ${titulo||'Sem título'}* (${executivo||''}): transcrição ausente ou muito curta para gerar material.`).catch(()=>{});
-        return;
-      }
-
-      // Verifica se já foi processada
-      const callId = input.call_id || titulo;
+      // Verifica se já foi processada (ANTES de buscar dados)
+      const callId = call_id || titulo;
       if (callId && isProcessed(callId)) {
         console.log('Call já processada, pulando:', callId);
         return;
       }
 
-      const conteudo = `Título: ${titulo||'Sem título'}\nData: ${data_call||''}\nExecutivo Frota162: ${executivo||''}\n\nTranscrição:\n${transcricao}`;
+      // Busca dados reais no Elephan (transcrição + data da call)
+      const callData = await fetchCallData(call_id);
+      const transcricao = callData.texto;
+      const dataRaw = callData.dataRaw;
+
+      // Filtro 0 — apenas calls de HOJE (usa a data REAL da API Elephan, horário Brasília UTC-3)
+      const offsetBrasilia = 3 * 60;
+      const agoraBrasilia = new Date(Date.now() - offsetBrasilia * 60 * 1000);
+      const hojeStr = agoraBrasilia.toISOString().slice(0, 10);
+
+      const dObj = new Date(dataRaw);
+      let dataCallStr = '';
+      let dataCallFormatada = 'Data não informada';
+      if (!isNaN(dObj.getTime())) {
+        const dBrasilia = new Date(dObj.getTime() - offsetBrasilia * 60 * 1000);
+        dataCallStr = dBrasilia.toISOString().slice(0, 10);
+        dataCallFormatada = dBrasilia.toISOString().slice(0, 16).replace('T', ' ');
+      }
+
+      // Se a data não é de hoje, descarta silenciosamente
+      if (dataCallStr && dataCallStr !== hojeStr) {
+        console.log('Descartado — call não é de hoje:', dataCallStr, 'hoje:', hojeStr, titulo);
+        return;
+      }
+      // Se não conseguiu determinar a data, descarta por segurança (evita processar calls antigas sem data)
+      if (!dataCallStr) {
+        console.log('Descartado — data da call não pôde ser determinada:', titulo);
+        return;
+      }
+
+      // Filtro transcrição
+      if (!transcricao || transcricao.length < 500) {
+        await postSlack(`:no_entry_sign: *Call descartada — ${titulo||'Sem título'}* (${executivo||''}): transcrição ausente ou muito curta para gerar material.`).catch(()=>{});
+        return;
+      }
+
+      const conteudo = `Título: ${titulo||'Sem título'}\nData: ${dataCallFormatada}\nExecutivo Frota162: ${executivo||''}\n\nTranscrição:\n${transcricao}`;
       const d = await callClaude(conteudo);
 
       // Validação pós-Claude — descarta silenciosamente se campos essenciais estiverem vazios
