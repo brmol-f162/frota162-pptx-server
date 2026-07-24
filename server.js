@@ -11,10 +11,10 @@ app.use(express.text({ type: '*/*', limit: '50mb' }));
 app.use(express.json({ limit: '50mb' }));
 
 // ─── Controle de IDs processados — PERSISTE NO GOOGLE DRIVE ───────────
-// O filesystem do Render é efêmero (reseta em restart/redeploy/inatividade),
-// por isso o controle vive num arquivo JSON no Shared Drive, que é permanente.
-const PROCESSED_FILENAME = 'frota162_processed_ids.json';
-let _processedFileId = null; // cache do fileId dentro da mesma execução
+// O filesystem do Render é efêmero. O controle vive num arquivo JSON no Drive.
+// CRÍTICO: o arquivo é identificado por um fileId FIXO (env PROCESSED_FILE_ID),
+// nunca por busca de nome — busca em paralelo criava múltiplos arquivos duplicados.
+const PROCESSED_FILE_ID = process.env.PROCESSED_FILE_ID;
 
 function getDriveClient() {
   const auth = new google.auth.GoogleAuth({
@@ -24,40 +24,18 @@ function getDriveClient() {
   return google.drive({ version: 'v3', auth });
 }
 
-// Localiza o arquivo de controle no Shared Drive (ou retorna null se não existe)
-async function findProcessedFile(drive) {
-  if (_processedFileId) return _processedFileId;
-  try {
-    const res = await drive.files.list({
-      q: `name='${PROCESSED_FILENAME}' and trashed=false`,
-      corpora: 'drive',
-      driveId: process.env.PASTA_RAIZ_ID,
-      includeItemsFromAllDrives: true,
-      supportsAllDrives: true,
-      fields: 'files(id,name)',
-      spaces: 'drive',
-    });
-    if (res.data.files && res.data.files.length > 0) {
-      _processedFileId = res.data.files[0].id;
-      return _processedFileId;
-    }
-  } catch(e) { console.log('findProcessedFile error:', e.message); }
-  return null;
-}
-
-// Lê o mapa {id: timestamp} do Drive, limpando entradas com mais de 7 dias
+// Lê o mapa {id: timestamp} do arquivo fixo, limpando entradas com mais de 7 dias
 async function loadProcessed(drive) {
   try {
-    const fileId = await findProcessedFile(drive);
-    if (!fileId) return {};
+    if (!PROCESSED_FILE_ID) { console.log('AVISO: PROCESSED_FILE_ID não configurado'); return {}; }
     const res = await drive.files.get(
-      { fileId, alt: 'media', supportsAllDrives: true },
+      { fileId: PROCESSED_FILE_ID, alt: 'media', supportsAllDrives: true },
       { responseType: 'text' }
     );
     let data = {};
     try { data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data; }
     catch(_) { data = {}; }
-    const cutoff = Date.now() - (7 * 24 * 60 * 60 * 1000); // 7 dias
+    const cutoff = Date.now() - (7 * 24 * 60 * 60 * 1000);
     const cleaned = {};
     for (const [id, ts] of Object.entries(data)) {
       if (ts > cutoff) cleaned[id] = ts;
@@ -66,21 +44,22 @@ async function loadProcessed(drive) {
   } catch(e) { console.log('loadProcessed error:', e.message); return {}; }
 }
 
-// Grava o mapa no Drive (cria o arquivo se não existir)
+// Grava o mapa no arquivo FIXO (sempre update, nunca create).
+// Se PROCESSED_FILE_ID não estiver setado, cria UMA vez e loga o ID para você
+// colar na env var — depois disso o arquivo é sempre o mesmo.
 async function saveProcessed(drive, ids) {
   try {
     const body = JSON.stringify(ids);
-    const fileId = await findProcessedFile(drive);
-    if (fileId) {
+    if (PROCESSED_FILE_ID) {
       await drive.files.update({
-        fileId,
+        fileId: PROCESSED_FILE_ID,
         media: { mimeType: 'application/json', body },
         supportsAllDrives: true,
       });
     } else {
       const created = await drive.files.create({
         requestBody: {
-          name: PROCESSED_FILENAME,
+          name: 'frota162_processed_ids.json',
           parents: [process.env.PASTA_RAIZ_ID],
           mimeType: 'application/json',
         },
@@ -88,7 +67,10 @@ async function saveProcessed(drive, ids) {
         supportsAllDrives: true,
         fields: 'id',
       });
-      _processedFileId = created.data.id;
+      console.log('====================================================');
+      console.log('ARQUIVO DE CONTROLE CRIADO. Configure no Render:');
+      console.log('PROCESSED_FILE_ID =', created.data.id);
+      console.log('====================================================');
     }
   } catch(e) { console.log('saveProcessed error:', e.message); }
 }
