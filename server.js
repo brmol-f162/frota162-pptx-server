@@ -10,12 +10,11 @@ const app = express();
 app.use(express.text({ type: '*/*', limit: '50mb' }));
 app.use(express.json({ limit: '50mb' }));
 
-// ─── Controle de IDs processados — PERSISTE NO GOOGLE DRIVE ───────────
-// O filesystem do Render é efêmero. O controle vive num arquivo JSON no Drive.
-// CRÍTICO: o arquivo é identificado por um fileId FIXO (env PROCESSED_FILE_ID),
-// nunca por busca de nome — busca em paralelo criava múltiplos arquivos duplicados.
-const PROCESSED_FILE_ID = process.env.PROCESSED_FILE_ID;
-
+// ─── Controle de duplicatas — MARCADOR ATÔMICO POR CALL ──────────────
+// Em vez de um único JSON (que sofre corrida de leitura/escrita quando várias
+// calls chegam juntas), usamos UM arquivo marcador por call_id dentro de uma
+// pasta de controle. Criar/checar um arquivo com nome único é atômico e à prova
+// de paralelismo. Pasta de controle: env PROCESSED_FOLDER_ID (ou PASTA_RAIZ_ID).
 function getDriveClient() {
   const auth = new google.auth.GoogleAuth({
     credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
@@ -24,68 +23,69 @@ function getDriveClient() {
   return google.drive({ version: 'v3', auth });
 }
 
-// Lê o mapa {id: timestamp} do arquivo fixo, limpando entradas com mais de 7 dias
-async function loadProcessed(drive) {
+function markerName(callId) {
+  return `processed_${callId}.marker`;
+}
+
+// Lista marcadores existentes para esta call (id + createdTime)
+async function listMarkers(drive, callId) {
   try {
-    if (!PROCESSED_FILE_ID) { console.log('AVISO: PROCESSED_FILE_ID não configurado'); return {}; }
-    const res = await drive.files.get(
-      { fileId: PROCESSED_FILE_ID, alt: 'media', supportsAllDrives: true },
-      { responseType: 'text' }
-    );
-    let data = {};
-    try { data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data; }
-    catch(_) { data = {}; }
-    const cutoff = Date.now() - (7 * 24 * 60 * 60 * 1000);
-    const cleaned = {};
-    for (const [id, ts] of Object.entries(data)) {
-      if (ts > cutoff) cleaned[id] = ts;
-    }
-    return cleaned;
-  } catch(e) { console.log('loadProcessed error:', e.message); return {}; }
+    const folderId = process.env.PROCESSED_FOLDER_ID || process.env.PASTA_RAIZ_ID;
+    const res = await drive.files.list({
+      q: `name='${markerName(callId)}' and '${folderId}' in parents and trashed=false`,
+      corpora: 'allDrives',
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      fields: 'files(id,createdTime)',
+      spaces: 'drive',
+      orderBy: 'createdTime',
+    });
+    return res.data.files || [];
+  } catch(e) { console.log('listMarkers error:', e.message); return []; }
 }
 
-// Grava o mapa no arquivo FIXO (sempre update, nunca create).
-// Se PROCESSED_FILE_ID não estiver setado, cria UMA vez e loga o ID para você
-// colar na env var — depois disso o arquivo é sempre o mesmo.
-async function saveProcessed(drive, ids) {
-  try {
-    const body = JSON.stringify(ids);
-    if (PROCESSED_FILE_ID) {
-      await drive.files.update({
-        fileId: PROCESSED_FILE_ID,
-        media: { mimeType: 'application/json', body },
-        supportsAllDrives: true,
-      });
-    } else {
-      const created = await drive.files.create({
-        requestBody: {
-          name: 'frota162_processed_ids.json',
-          parents: [process.env.PASTA_RAIZ_ID],
-          mimeType: 'application/json',
-        },
-        media: { mimeType: 'application/json', body },
-        supportsAllDrives: true,
-        fields: 'id',
-      });
-      console.log('====================================================');
-      console.log('ARQUIVO DE CONTROLE CRIADO. Configure no Render:');
-      console.log('PROCESSED_FILE_ID =', created.data.id);
-      console.log('====================================================');
-    }
-  } catch(e) { console.log('saveProcessed error:', e.message); }
+// Cria o marcador desta call e retorna o id criado
+async function createMarker(drive, callId) {
+  const folderId = process.env.PROCESSED_FOLDER_ID || process.env.PASTA_RAIZ_ID;
+  const created = await drive.files.create({
+    requestBody: {
+      name: markerName(callId),
+      parents: [folderId],
+      mimeType: 'text/plain',
+    },
+    media: { mimeType: 'text/plain', body: String(Date.now()) },
+    supportsAllDrives: true,
+    fields: 'id,createdTime',
+  });
+  return created.data.id;
 }
 
-async function isProcessed(drive, callId) {
-  const ids = await loadProcessed(drive);
-  return !!ids[callId];
-}
+// Estratégia à prova de corrida:
+// 1) se já existe marcador antes de eu criar → já processada, pula
+// 2) crio meu marcador
+// 3) releio: se o marcador mais antigo não é o meu → outra instância ganhou a corrida, pula
+// Retorna true se ESTA instância deve processar, false se deve pular.
+async function claimCall(drive, callId) {
+  const existentes = await listMarkers(drive, callId);
+  if (existentes.length > 0) return false; // já processada
 
-async function markProcessed(drive, callId) {
-  const ids = await loadProcessed(drive);
-  ids[callId] = Date.now();
-  await saveProcessed(drive, ids);
-}
+  const meuId = await createMarker(drive, callId);
+  if (!meuId) return false;
 
+  // Pequena espera para que criações concorrentes fiquem visíveis
+  await new Promise(r => setTimeout(r, 1500));
+
+  const todos = await listMarkers(drive, callId);
+  if (todos.length <= 1) return true; // só o meu
+
+  // Houve corrida: só o marcador mais antigo (menor createdTime; empate → menor id) processa
+  todos.sort((a,b) => {
+    if (a.createdTime !== b.createdTime) return a.createdTime < b.createdTime ? -1 : 1;
+    return a.id < b.id ? -1 : 1;
+  });
+  const vencedor = todos[0].id;
+  return vencedor === meuId;
+}
 const COR = {
   laranja:'E8401C', dark:'1A1A1A', branco:'FFFFFF', fundo:'F7F6F4',
   divisor:'E0DFDD', verde:'1E6B1E', vermelho:'CC2200', azul:'1565C0', cinza:'888888',
@@ -463,15 +463,15 @@ app.post('/generate', (req, res) => {
       // Cliente Drive único para toda a execução (usado no controle de duplicatas e no upload)
       const drive = getDriveClient();
 
-      // Verifica se já foi processada (controle PERSISTENTE no Google Drive)
+      // Controle de duplicatas à prova de corrida (marcador atômico no Drive)
       const callId = call_id || titulo;
-      if (callId && await isProcessed(drive, callId)) {
-        console.log('Call já processada, pulando:', callId);
-        return;
+      if (callId) {
+        const devoProcessar = await claimCall(drive, callId);
+        if (!devoProcessar) {
+          console.log('Call já processada ou perdeu a corrida, pulando:', callId);
+          return;
+        }
       }
-      // Reserva o ID IMEDIATAMENTE para evitar corrida quando várias calls
-      // do mesmo lote são processadas em paralelo (o Make dispara todas juntas)
-      if (callId) await markProcessed(drive, callId);
 
       // Busca dados reais no Elephan (transcrição + data da call)
       const callData = await fetchCallData(call_id);
