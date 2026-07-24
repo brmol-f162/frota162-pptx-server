@@ -10,39 +10,98 @@ const app = express();
 app.use(express.text({ type: '*/*', limit: '50mb' }));
 app.use(express.json({ limit: '50mb' }));
 
-// Controle de IDs processados — persiste em arquivo local
-const PROCESSED_FILE = '/tmp/frota162_processed.json';
+// ─── Controle de IDs processados — PERSISTE NO GOOGLE DRIVE ───────────
+// O filesystem do Render é efêmero (reseta em restart/redeploy/inatividade),
+// por isso o controle vive num arquivo JSON no Shared Drive, que é permanente.
+const PROCESSED_FILENAME = 'frota162_processed_ids.json';
+let _processedFileId = null; // cache do fileId dentro da mesma execução
 
-function loadProcessed() {
+function getDriveClient() {
+  const auth = new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
+    scopes: ['https://www.googleapis.com/auth/drive'],
+  });
+  return google.drive({ version: 'v3', auth });
+}
+
+// Localiza o arquivo de controle no Shared Drive (ou retorna null se não existe)
+async function findProcessedFile(drive) {
+  if (_processedFileId) return _processedFileId;
   try {
-    if (fs.existsSync(PROCESSED_FILE)) {
-      const data = JSON.parse(fs.readFileSync(PROCESSED_FILE, 'utf8'));
-      // Limpa IDs com mais de 48h para não crescer infinito
-      const cutoff = Date.now() - (48 * 60 * 60 * 1000);
-      const cleaned = {};
-      for (const [id, ts] of Object.entries(data)) {
-        if (ts > cutoff) cleaned[id] = ts;
-      }
-      return cleaned;
+    const res = await drive.files.list({
+      q: `name='${PROCESSED_FILENAME}' and trashed=false`,
+      corpora: 'drive',
+      driveId: process.env.PASTA_RAIZ_ID,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      fields: 'files(id,name)',
+      spaces: 'drive',
+    });
+    if (res.data.files && res.data.files.length > 0) {
+      _processedFileId = res.data.files[0].id;
+      return _processedFileId;
     }
-  } catch(e) { console.log('loadProcessed error:', e.message); }
-  return {};
+  } catch(e) { console.log('findProcessedFile error:', e.message); }
+  return null;
 }
 
-function saveProcessed(ids) {
-  try { fs.writeFileSync(PROCESSED_FILE, JSON.stringify(ids), 'utf8'); }
-  catch(e) { console.log('saveProcessed error:', e.message); }
+// Lê o mapa {id: timestamp} do Drive, limpando entradas com mais de 7 dias
+async function loadProcessed(drive) {
+  try {
+    const fileId = await findProcessedFile(drive);
+    if (!fileId) return {};
+    const res = await drive.files.get(
+      { fileId, alt: 'media', supportsAllDrives: true },
+      { responseType: 'text' }
+    );
+    let data = {};
+    try { data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data; }
+    catch(_) { data = {}; }
+    const cutoff = Date.now() - (7 * 24 * 60 * 60 * 1000); // 7 dias
+    const cleaned = {};
+    for (const [id, ts] of Object.entries(data)) {
+      if (ts > cutoff) cleaned[id] = ts;
+    }
+    return cleaned;
+  } catch(e) { console.log('loadProcessed error:', e.message); return {}; }
 }
 
-function isProcessed(callId) {
-  const ids = loadProcessed();
+// Grava o mapa no Drive (cria o arquivo se não existir)
+async function saveProcessed(drive, ids) {
+  try {
+    const body = JSON.stringify(ids);
+    const fileId = await findProcessedFile(drive);
+    if (fileId) {
+      await drive.files.update({
+        fileId,
+        media: { mimeType: 'application/json', body },
+        supportsAllDrives: true,
+      });
+    } else {
+      const created = await drive.files.create({
+        requestBody: {
+          name: PROCESSED_FILENAME,
+          parents: [process.env.PASTA_RAIZ_ID],
+          mimeType: 'application/json',
+        },
+        media: { mimeType: 'application/json', body },
+        supportsAllDrives: true,
+        fields: 'id',
+      });
+      _processedFileId = created.data.id;
+    }
+  } catch(e) { console.log('saveProcessed error:', e.message); }
+}
+
+async function isProcessed(drive, callId) {
+  const ids = await loadProcessed(drive);
   return !!ids[callId];
 }
 
-function markProcessed(callId) {
-  const ids = loadProcessed();
+async function markProcessed(drive, callId) {
+  const ids = await loadProcessed(drive);
   ids[callId] = Date.now();
-  saveProcessed(ids);
+  await saveProcessed(drive, ids);
 }
 
 const COR = {
@@ -419,12 +478,18 @@ app.post('/generate', (req, res) => {
         return;
       }
 
-      // Verifica se já foi processada (ANTES de buscar dados)
+      // Cliente Drive único para toda a execução (usado no controle de duplicatas e no upload)
+      const drive = getDriveClient();
+
+      // Verifica se já foi processada (controle PERSISTENTE no Google Drive)
       const callId = call_id || titulo;
-      if (callId && isProcessed(callId)) {
+      if (callId && await isProcessed(drive, callId)) {
         console.log('Call já processada, pulando:', callId);
         return;
       }
+      // Reserva o ID IMEDIATAMENTE para evitar corrida quando várias calls
+      // do mesmo lote são processadas em paralelo (o Make dispara todas juntas)
+      if (callId) await markProcessed(drive, callId);
 
       // Busca dados reais no Elephan (transcrição + data da call)
       const callData = await fetchCallData(call_id);
@@ -486,11 +551,6 @@ app.post('/generate', (req, res) => {
       const dClean = sanitizeObj(d);
       await gerarPPTX(dClean, outPath);
 
-      const auth = new google.auth.GoogleAuth({
-        credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
-        scopes: ['https://www.googleapis.com/auth/drive'],
-      });
-      const drive = google.drive({ version: 'v3', auth });
       const pastaId = process.env.PASTA_RAIZ_ID;
 
       const uploaded = await drive.files.create({
@@ -502,9 +562,7 @@ app.post('/generate', (req, res) => {
 
       await drive.permissions.create({ fileId: uploaded.data.id, supportsAllDrives: true, requestBody: { role: 'writer', type: 'anyone' } });
       fs.unlinkSync(outPath);
-
-      // Marca como processada
-      if (callId) markProcessed(callId);
+      // ID já foi reservado no início — não precisa marcar de novo aqui
 
       // Temperatura com emoji
       const tempEmoji = d.temperatura==='quente' ? '🔴' : d.temperatura==='morno' ? '🟡' : '🔵';
