@@ -570,4 +570,4 @@ app.post('/generate', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v5 porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v8 (marcador atomico + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
