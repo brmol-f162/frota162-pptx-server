@@ -151,6 +151,13 @@ function callClaude(text) {
       res.on('end', () => {
         try {
           const p = JSON.parse(data);
+          // Blindagem: a Anthropic pode retornar erro (rate limit, overload, etc.)
+          // em formato sem 'content' — ex: {type:'error', error:{type, message}}
+          if (p.type === 'error' || !p.content || !Array.isArray(p.content) || !p.content[0]) {
+            const motivo = p.error?.message || p.error?.type || JSON.stringify(p).slice(0,200);
+            reject(new Error('Claude API error: ' + motivo));
+            return;
+          }
           let t = p.content[0].text.replace(/```json/gi,'').replace(/```/g,'').trim();
           try {
             resolve(JSON.parse(t));
@@ -510,7 +517,21 @@ app.post('/generate', (req, res) => {
       }
 
       const conteudo = `Título: ${titulo||'Sem título'}\nData: ${dataCallFormatada}\nExecutivo Frota162: ${executivo||''}\n\nTranscrição:\n${transcricao}`;
-      const d = await callClaude(conteudo);
+
+      // Retry automático — erros da Anthropic (rate limit/overload) costumam ser transitórios
+      let d;
+      let lastErr;
+      for (let tentativa = 1; tentativa <= 3; tentativa++) {
+        try {
+          d = await callClaude(conteudo);
+          break;
+        } catch(e) {
+          lastErr = e;
+          console.log(`callClaude tentativa ${tentativa} falhou:`, e.message);
+          if (tentativa < 3) await new Promise(r => setTimeout(r, 5000 * tentativa));
+        }
+      }
+      if (!d) throw lastErr;
 
       // Validação pós-Claude — descarta silenciosamente se campos essenciais estiverem vazios
       const empresaValida = d.empresa && d.empresa !== 'Empresa Não Identificada' && d.empresa !== 'Não identificado' && d.empresa !== '';
@@ -566,10 +587,10 @@ app.post('/generate', (req, res) => {
 
     } catch(err) {
       console.error('Background error:', err.message);
-      await postSlack(`:warning: Erro ao gerar PPTX: ${err.message}`).catch(()=>{});
+      await postSlack(`:warning: *Erro ao gerar material* — ${titulo||'Sem título'} (${executivo||'?'})\nMotivo: ${err.message}`).catch(()=>{});
     }
   })();
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v8 (marcador atomico + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v10 (retry Claude + erro identificado + marcador atomico + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
