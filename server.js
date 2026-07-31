@@ -23,16 +23,20 @@ function getDriveClient() {
   return google.drive({ version: 'v3', auth });
 }
 
-function markerName(callId) {
-  return `processed_${callId}.marker`;
-}
+// Dois tipos de marcador:
+// - "claiming_" — temporário, só resolve corrida entre calls do MESMO lote (paralelismo).
+//   Não significa sucesso; várias podem existir e sumir sem problema.
+// - "processed_" — DEFINITIVO, só é criado depois que o Slack confirma o envio.
+//   É o único que o isProcessed() consulta — se a call falhar antes do Slack,
+//   nenhum "processed_" existe e ela pode ser tentada de novo no próximo lote.
+function claimingName(callId) { return `claiming_${callId}.marker`; }
+function processedName(callId) { return `processed_${callId}.marker`; }
 
-// Lista marcadores existentes para esta call (id + createdTime)
-async function listMarkers(drive, callId) {
+async function listMarkersByName(drive, name) {
   try {
     const folderId = process.env.PROCESSED_FOLDER_ID || process.env.PASTA_RAIZ_ID;
     const res = await drive.files.list({
-      q: `name='${markerName(callId)}' and '${folderId}' in parents and trashed=false`,
+      q: `name='${name}' and '${folderId}' in parents and trashed=false`,
       corpora: 'allDrives',
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
@@ -41,18 +45,13 @@ async function listMarkers(drive, callId) {
       orderBy: 'createdTime',
     });
     return res.data.files || [];
-  } catch(e) { console.log('listMarkers error:', e.message); return []; }
+  } catch(e) { console.log('listMarkersByName error:', e.message); return []; }
 }
 
-// Cria o marcador desta call e retorna o id criado
-async function createMarker(drive, callId) {
+async function createMarkerFile(drive, name) {
   const folderId = process.env.PROCESSED_FOLDER_ID || process.env.PASTA_RAIZ_ID;
   const created = await drive.files.create({
-    requestBody: {
-      name: markerName(callId),
-      parents: [folderId],
-      mimeType: 'text/plain',
-    },
+    requestBody: { name, parents: [folderId], mimeType: 'text/plain' },
     media: { mimeType: 'text/plain', body: String(Date.now()) },
     supportsAllDrives: true,
     fields: 'id,createdTime',
@@ -60,25 +59,34 @@ async function createMarker(drive, callId) {
   return created.data.id;
 }
 
-// Estratégia à prova de corrida:
-// 1) se já existe marcador antes de eu criar → já processada, pula
-// 2) crio meu marcador
-// 3) releio: se o marcador mais antigo não é o meu → outra instância ganhou a corrida, pula
-// Retorna true se ESTA instância deve processar, false se deve pular.
-async function claimCall(drive, callId) {
-  const existentes = await listMarkers(drive, callId);
-  if (existentes.length > 0) return false; // já processada
+// Já foi processada com SUCESSO (entregue no Slack)? Só isso pula a call.
+async function isProcessed(drive, callId) {
+  const marcadores = await listMarkersByName(drive, processedName(callId));
+  return marcadores.length > 0;
+}
 
-  const meuId = await createMarker(drive, callId);
+// Marca sucesso DEFINITIVO — chamar SÓ depois do postSlack confirmar o envio.
+async function markProcessed(drive, callId) {
+  await createMarkerFile(drive, processedName(callId));
+}
+
+// Resolve corrida de paralelismo com marcador TEMPORÁRIO (claiming).
+// Retorna true se ESTA instância deve seguir processando, false se deve pular
+// (ou porque já tem sucesso definitivo, ou porque perdeu a corrida do lote).
+async function claimCall(drive, callId) {
+  if (await isProcessed(drive, callId)) return false; // já teve sucesso antes
+
+  const nome = claimingName(callId);
+  const existentes = await listMarkersByName(drive, nome);
+  const meuId = await createMarkerFile(drive, nome);
   if (!meuId) return false;
 
   // Pequena espera para que criações concorrentes fiquem visíveis
   await new Promise(r => setTimeout(r, 1500));
 
-  const todos = await listMarkers(drive, callId);
+  const todos = await listMarkersByName(drive, nome);
   if (todos.length <= 1) return true; // só o meu
 
-  // Houve corrida: só o marcador mais antigo (menor createdTime; empate → menor id) processa
   todos.sort((a,b) => {
     if (a.createdTime !== b.createdTime) return a.createdTime < b.createdTime ? -1 : 1;
     return a.id < b.id ? -1 : 1;
@@ -213,14 +221,24 @@ function fetchCallData(callId) {
 }
 
 function postSlack(msg) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const body = JSON.stringify({ text: msg });
     const url = new URL(process.env.SLACK_WEBHOOK_URL);
     const req = https.request({
       hostname: url.hostname, path: url.pathname + url.search, method: 'POST',
       headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }
-    }, (res) => { res.on('data', ()=>{}); res.on('end', resolve); });
-    req.on('error', () => resolve());
+    }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        // Slack webhook responde 200 com corpo "ok" em caso de sucesso.
+        // Qualquer outro status significa que a mensagem NÃO foi entregue.
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve();
+        else reject(new Error(`Slack respondeu ${res.statusCode}: ${data.slice(0,200)}`));
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('Slack timeout')); });
     req.write(body); req.end();
   });
 }
@@ -585,6 +603,11 @@ app.post('/generate', (req, res) => {
 
       await postSlack(msg);
 
+      // SÓ agora, com o Slack confirmado, marca sucesso definitivo.
+      // Se qualquer etapa anterior falhar, este marcador nunca é criado
+      // e a call pode ser tentada de novo no próximo lote do Make.
+      if (callId) await markProcessed(drive, callId);
+
     } catch(err) {
       console.error('Background error:', err.message);
       await postSlack(`:warning: *Erro ao gerar material* — ${titulo||'Sem título'} (${executivo||'?'})\nMotivo: ${err.message}`).catch(()=>{});
@@ -593,4 +616,4 @@ app.post('/generate', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v10 (retry Claude + erro identificado + marcador atomico + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v11 (sucesso so apos Slack + retry Claude + marcador atomico + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
