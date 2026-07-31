@@ -73,11 +73,20 @@ async function markProcessed(drive, callId) {
 // Resolve corrida de paralelismo com marcador TEMPORÁRIO (claiming).
 // Retorna true se ESTA instância deve seguir processando, false se deve pular
 // (ou porque já tem sucesso definitivo, ou porque perdeu a corrida do lote).
+// IMPORTANTE: marcadores "claiming_" com mais de 5 minutos são considerados
+// ÓRFÃOS (de uma tentativa anterior que travou/crashou antes do catch final)
+// e são ignorados — senão um claiming órfão bloquearia a call PARA SEMPRE.
+const CLAIMING_TTL_MS = 5 * 60 * 1000;
+
 async function claimCall(drive, callId) {
   if (await isProcessed(drive, callId)) return false; // já teve sucesso antes
 
   const nome = claimingName(callId);
-  const existentes = await listMarkersByName(drive, nome);
+  const agora = Date.now();
+
+  const existentesAntes = await listMarkersByName(drive, nome);
+  const vivosAntes = existentesAntes.filter(m => (agora - new Date(m.createdTime).getTime()) < CLAIMING_TTL_MS);
+
   const meuId = await createMarkerFile(drive, nome);
   if (!meuId) return false;
 
@@ -85,13 +94,15 @@ async function claimCall(drive, callId) {
   await new Promise(r => setTimeout(r, 1500));
 
   const todos = await listMarkersByName(drive, nome);
-  if (todos.length <= 1) return true; // só o meu
+  const vivos = todos.filter(m => (agora - new Date(m.createdTime).getTime()) < CLAIMING_TTL_MS || m.id === meuId);
 
-  todos.sort((a,b) => {
+  if (vivos.length <= 1) return true; // só o meu (os órfãos foram ignorados)
+
+  vivos.sort((a,b) => {
     if (a.createdTime !== b.createdTime) return a.createdTime < b.createdTime ? -1 : 1;
     return a.id < b.id ? -1 : 1;
   });
-  const vencedor = todos[0].id;
+  const vencedor = vivos[0].id;
   return vencedor === meuId;
 }
 const COR = {
@@ -616,4 +627,4 @@ app.post('/generate', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v11 (sucesso so apos Slack + retry Claude + marcador atomico + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v12 (claiming com TTL 5min + sucesso so apos Slack + retry Claude + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
