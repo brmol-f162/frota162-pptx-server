@@ -473,11 +473,15 @@ app.post('/generate', (req, res) => {
   res.json({ ok: true, status: 'processing' });
 
   (async () => {
+    // Declaradas ANTES do try — se o JSON.parse falhar, o catch final ainda
+    // consegue montar a mensagem de erro sem quebrar com ReferenceError
+    // (bug real que já causou um crash do processo inteiro — "Exited with status 1").
+    let titulo, executivo, call_id;
     try {
       let raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
       raw = raw.replace(/```json/gi,'').replace(/```/g,'').trim();
       const input = JSON.parse(raw);
-      const { titulo, executivo, call_id } = input;
+      ({ titulo, executivo, call_id } = input);
 
       // Filtro 1 — título deve conter "Frota162 ><" ou "Frota162 <>"
       const tituloLower = (titulo||'').toLowerCase();
@@ -621,10 +625,14 @@ app.post('/generate', (req, res) => {
 
     } catch(err) {
       console.error('Background error:', err.message);
-      await postSlack(`:warning: *Erro ao gerar material* — ${titulo||'Sem título'} (${executivo||'?'})\nMotivo: ${err.message}`).catch(()=>{});
+      try {
+        await postSlack(`:warning: *Erro ao gerar material* — ${titulo||'Sem título'} (${executivo||'?'})\nMotivo: ${err.message}`);
+      } catch(e2) {
+        console.error('Falha ao avisar erro no Slack:', e2.message);
+      }
     }
   })();
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v12 (claiming com TTL 5min + sucesso so apos Slack + retry Claude + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v13 (catch a prova de crash + claiming TTL 5min + sucesso so apos Slack + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
