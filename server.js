@@ -70,6 +70,16 @@ async function markProcessed(drive, callId) {
   await createMarkerFile(drive, processedName(callId));
 }
 
+// Marcadores genéricos de "já fiz X uma vez" — usado para o aviso de transcrição
+// vazia/curta não repetir a cada execução do Make para a mesma call.
+async function isMarked(drive, chave) {
+  const marcadores = await listMarkersByName(drive, `${chave}.marker`);
+  return marcadores.length > 0;
+}
+async function markGeneric(drive, chave) {
+  await createMarkerFile(drive, `${chave}.marker`);
+}
+
 // Resolve corrida de paralelismo com marcador TEMPORÁRIO (claiming).
 // Retorna true se ESTA instância deve seguir processando, false se deve pular
 // (ou porque já tem sucesso definitivo, ou porque perdeu a corrida do lote).
@@ -543,9 +553,17 @@ app.post('/generate', (req, res) => {
         return;
       }
 
-      // Filtro transcrição
+      // Filtro transcrição — avisa no Slack, mas SÓ UMA VEZ por call (marcador dedicado
+      // evita que a mesma call vazia continue gerando o mesmo aviso a cada execução do Make,
+      // já que ela nunca vai ganhar o marcador "processed_" por definição).
       if (!transcricao || transcricao.length < 500) {
-        await postSlack(`:no_entry_sign: *Call descartada — ${titulo||'Sem título'}* (${executivo||''}): transcrição ausente ou muito curta para gerar material.`).catch(()=>{});
+        const jaAvisou = await isMarked(drive, `descartada_${callId}`);
+        if (!jaAvisou) {
+          await postSlack(`:no_entry_sign: *Call descartada — ${titulo||'Sem título'}* (${executivo||''}): transcrição ausente ou muito curta para gerar material.`).catch(()=>{});
+          await markGeneric(drive, `descartada_${callId}`);
+        } else {
+          console.log('Descartado (silencioso, já avisado antes) — transcrição curta:', callId);
+        }
         return;
       }
 
@@ -635,4 +653,4 @@ app.post('/generate', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v13 (catch a prova de crash + claiming TTL 5min + sucesso so apos Slack + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v14 (aviso unico p/ transcricao curta + catch a prova de crash + claiming TTL 5min + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
