@@ -872,7 +872,7 @@ app.post('/webhook/salesbud', (req, res) => {
       if (!transcricao || transcricao.length < 500) {
         const jaAvisou = await isMarked(drive, `descartada_${callId}`);
         if (!jaAvisou) {
-          await postSlack(`:no_entry_sign: *[TESTE SALESBUD] Call descartada — ${titulo}* (${executivo}): transcrição ausente ou muito curta.`, process.env.SALESBUD_TEST_SLACK_WEBHOOK_URL).catch(()=>{});
+          await postSlack(`:no_entry_sign: *[Salesbud] Call descartada — ${titulo}* (${executivo}): transcrição ausente ou muito curta.`, process.env.SLACK_WEBHOOK_URL).catch(()=>{});
           await markGeneric(drive, `descartada_${callId}`);
         } else {
           console.log('[Salesbud] Descartado (silencioso, já avisado antes) — transcrição curta:', callId);
@@ -904,7 +904,7 @@ app.post('/webhook/salesbud', (req, res) => {
       }
 
       const empresa = d.empresa || 'Prospect';
-      const nomeArq = `[TESTE SALESBUD] Frota162 >< ${empresa} (Diretoria).pptx`;
+      const nomeArq = `Frota162 >< ${empresa} (Diretoria).pptx`;
       const outPath = path.join(os.tmpdir(), nomeArq);
 
       const sanitizeObjSb = (obj) => {
@@ -932,9 +932,9 @@ app.post('/webhook/salesbud', (req, res) => {
       const roiAnual = d.roi_anual || 0;
       const roiTexto = roiAnual > 0 ? `R$${Math.round(roiAnual).toLocaleString('pt-BR')}/ano` : 'A calcular';
 
-      const msg = `:car: *[TESTE SALESBUD] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+      const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
 
-      await postSlack(msg, process.env.SALESBUD_TEST_SLACK_WEBHOOK_URL);
+      await postSlack(msg, process.env.SLACK_WEBHOOK_URL);
 
       // Só marca sucesso definitivo depois do Slack confirmar entrega
       await markProcessed(drive, callId);
@@ -942,7 +942,7 @@ app.post('/webhook/salesbud', (req, res) => {
     } catch(err) {
       console.error('[Salesbud] Background error:', err.message);
       try {
-        await postSlack(`:warning: *[TESTE SALESBUD] Erro ao gerar material* — ${titulo||'Sem título'} (${executivo||'?'})\nMotivo: ${err.message}`, process.env.SALESBUD_TEST_SLACK_WEBHOOK_URL);
+        await postSlack(`:warning: *[Salesbud] Erro ao gerar material* — ${titulo||'Sem título'} (${executivo||'?'})\nMotivo: ${err.message}`, process.env.SLACK_WEBHOOK_URL);
       } catch(e2) {
         console.error('[Salesbud] Falha ao avisar erro no Slack:', e2.message);
       }
