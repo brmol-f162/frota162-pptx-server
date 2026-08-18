@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const express = require('express');
 const PptxGenJS = require('pptxgenjs');
 const { google } = require('googleapis');
@@ -245,10 +246,10 @@ function fetchCallData(callId) {
   });
 }
 
-function postSlack(msg) {
+function postSlack(msg, webhookUrl) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ text: msg });
-    const url = new URL(process.env.SLACK_WEBHOOK_URL);
+    const url = new URL(webhookUrl || process.env.SLACK_WEBHOOK_URL);
     const req = https.request({
       hostname: url.hostname, path: url.pathname + url.search, method: 'POST',
       headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }
@@ -716,6 +717,234 @@ app.post('/generate', (req, res) => {
         await postSlack(`:warning: *Erro ao gerar material* — ${titulo||'Sem título'} (${executivo||'?'})\nMotivo: ${err.message}`);
       } catch(e2) {
         console.error('Falha ao avisar erro no Slack:', e2.message);
+      }
+    }
+  })();
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// SALESBUD — PIPELINE PARALELO DE TESTE (isolado do fluxo Elephan acima)
+// Nada neste bloco modifica ou depende do /generate. Namespace de dedup
+// próprio (prefixo "sb_"), postagem em canal de TESTE separado no Slack.
+// ═══════════════════════════════════════════════════════════════════════
+
+// Mapa userId (Salesbud) → nome do executivo Frota162
+const SALESBUD_USER_MAP = {
+  '15361': 'William Duarte',
+  '15360': 'Palloma Santos',
+  '15359': 'Thais Cristina',
+  '15358': 'Julio Mazzetti',
+  '15357': 'Rávila Silva',
+  '15356': 'Bruno Pereira',
+};
+
+// A Salesbud manda a transcrição em HTML (<p><strong>João:</strong> texto...).
+// Converte para texto plano preservando quebras de linha por parágrafo.
+function stripHtml(html) {
+  if (!html) return '';
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Verificação de assinatura HMAC — BEST EFFORT.
+// A doc da Salesbud não especifica o nome exato do header nem o algoritmo.
+// Se SALESBUD_WEBHOOK_SECRET não estiver configurado, aceita sem verificar.
+// Se estiver configurado mas nenhum header conhecido for encontrado, ACEITA
+// e LOGA todos os headers recebidos — isso é o que vamos usar para descobrir
+// o header real na primeira entrega de teste, e então enrijecer a checagem.
+function verificaAssinaturaSalesbud(req, rawBody) {
+  const secret = process.env.SALESBUD_WEBHOOK_SECRET;
+  if (!secret) return { ok: true, motivo: 'sem secret configurado - aceito sem verificacao' };
+
+  const candidatos = ['x-salesbud-signature', 'x-signature', 'x-webhook-signature', 'x-hub-signature-256'];
+  let headerEncontrado = null, valorHeader = null;
+  for (const h of candidatos) {
+    if (req.headers[h]) { headerEncontrado = h; valorHeader = req.headers[h]; break; }
+  }
+  if (!headerEncontrado) {
+    console.log('[Salesbud] AVISO: nenhum header de assinatura reconhecido nesta entrega.');
+    console.log('[Salesbud] Headers recebidos (usar para identificar o header real):', JSON.stringify(req.headers));
+    return { ok: true, motivo: 'header de assinatura nao encontrado - aceito temporariamente' };
+  }
+
+  const hashCalculado = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  const valorLimpo = String(valorHeader).replace(/^sha256=/, '');
+  const valido = hashCalculado === valorLimpo;
+  console.log(`[Salesbud] Verificação HMAC via header '${headerEncontrado}': ${valido ? 'OK' : 'FALHOU'}`);
+  return { ok: valido, motivo: valido ? 'assinatura valida' : 'assinatura invalida' };
+}
+
+app.post('/webhook/salesbud', (req, res) => {
+  // Responde rápido, processa em background (mesmo padrão de robustez do /generate)
+  res.json({ ok: true, status: 'processing' });
+
+  (async () => {
+    let titulo, executivo, callId;
+    try {
+      const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+
+      const verificacao = verificaAssinaturaSalesbud(req, rawBody);
+      if (!verificacao.ok) {
+        console.log('[Salesbud] Webhook REJEITADO -', verificacao.motivo);
+        return;
+      }
+
+      const payload = JSON.parse(rawBody);
+
+      // Só processamos o payload de "Reunião" (tem transcription + meetingAt).
+      // Payloads de VoIP/WhatsApp são ignorados nesta primeira fase.
+      if (!payload.transcription || !payload.meetingAt) {
+        console.log('[Salesbud] Payload não é do tipo Reunião, ignorando.');
+        return;
+      }
+
+      titulo = payload.title || 'Sem título';
+      const userId = String(payload.userId || '');
+      executivo = SALESBUD_USER_MAP[userId] || null;
+      callId = `sb_${payload.id}`;
+
+      // Filtro 1 — só reunião concluída (status 3)
+      if (payload.status !== 3) {
+        console.log('[Salesbud] Descartado — status não é concluído:', payload.status, titulo);
+        return;
+      }
+
+      // Filtro 2 — só reunião externa (com cliente) — a Salesbud já classifica isso
+      if (payload.isExternal !== true) {
+        console.log('[Salesbud] Descartado — reunião interna:', titulo);
+        return;
+      }
+
+      // Filtro 3 — título deve conter padrão Frota162
+      const tituloLower = titulo.toLowerCase();
+      const ehReuniaoCliente = tituloLower.includes('frota162 ><') || tituloLower.includes('frota162 <>') || tituloLower.includes('frota162><') || tituloLower.includes('frota162<>') || tituloLower.includes('frota 162');
+      if (!ehReuniaoCliente) {
+        console.log('[Salesbud] Descartado — não é reunião com cliente:', titulo);
+        return;
+      }
+
+      // Filtro 4 — executivo autorizado (o webhook já pode estar filtrado por usuário
+      // na própria Salesbud, mas mantemos esta checagem como segunda camada de defesa)
+      if (!executivo) {
+        console.log('[Salesbud] Descartado — userId não mapeado:', userId, titulo);
+        return;
+      }
+
+      const drive = getDriveClient();
+
+      // Filtro 5 — já processada / corrida de paralelismo (mesma infra de marcadores
+      // do fluxo Elephan, mas com callId prefixado "sb_" = isolamento total)
+      const devoProcessar = await claimCall(drive, callId);
+      if (!devoProcessar) {
+        console.log('[Salesbud] Já processada ou perdeu a corrida, pulando:', callId);
+        return;
+      }
+
+      // Filtro 6 — data da reunião precisa ser HOJE (Brasília UTC-3).
+      // meetingAt já vem em ISO — muito mais simples que o parsing que fazíamos com Elephan.
+      const offsetBrasilia = 3 * 60;
+      const agoraBrasilia = new Date(Date.now() - offsetBrasilia * 60 * 1000);
+      const hojeStr = agoraBrasilia.toISOString().slice(0, 10);
+      const dObj = new Date(payload.meetingAt);
+      let dataCallStr = '', dataCallFormatada = 'Data não informada';
+      if (!isNaN(dObj.getTime())) {
+        const dBrasilia = new Date(dObj.getTime() - offsetBrasilia * 60 * 1000);
+        dataCallStr = dBrasilia.toISOString().slice(0, 10);
+        dataCallFormatada = dBrasilia.toISOString().slice(0, 16).replace('T', ' ');
+      }
+      if (!dataCallStr || dataCallStr !== hojeStr) {
+        console.log('[Salesbud] Descartado — reunião não é de hoje:', dataCallStr, 'hoje:', hojeStr, titulo);
+        return;
+      }
+
+      // Transcrição: remove HTML, valida tamanho mínimo. Aviso único se curta demais.
+      const transcricao = stripHtml(payload.transcription);
+      if (!transcricao || transcricao.length < 500) {
+        const jaAvisou = await isMarked(drive, `descartada_${callId}`);
+        if (!jaAvisou) {
+          await postSlack(`:no_entry_sign: *[TESTE SALESBUD] Call descartada — ${titulo}* (${executivo}): transcrição ausente ou muito curta.`, process.env.SALESBUD_TEST_SLACK_WEBHOOK_URL).catch(()=>{});
+          await markGeneric(drive, `descartada_${callId}`);
+        } else {
+          console.log('[Salesbud] Descartado (silencioso, já avisado antes) — transcrição curta:', callId);
+        }
+        return;
+      }
+
+      // customerName/company já vêm estruturados da Salesbud — passamos como contexto
+      // extra pro Claude, complementando (não substituindo) a extração pela transcrição.
+      const contextoExtra = `Nome/email do cliente (Salesbud): ${payload.customerName||'não informado'}\nEmpresa/domínio (Salesbud): ${payload.company||'não informado'}\n\n`;
+      const conteudo = `Título: ${titulo}\nData: ${dataCallFormatada}\nExecutivo Frota162: ${executivo}\n${contextoExtra}Transcrição:\n${transcricao}`;
+
+      let d, lastErr;
+      for (let tentativa = 1; tentativa <= 3; tentativa++) {
+        try { d = await callClaude(conteudo); break; }
+        catch(e) {
+          lastErr = e;
+          console.log(`[Salesbud] callClaude tentativa ${tentativa} falhou:`, e.message);
+          if (tentativa < 3) await new Promise(r => setTimeout(r, 5000 * tentativa));
+        }
+      }
+      if (!d) throw lastErr;
+
+      const empresaValida = d.empresa && d.empresa !== 'Empresa Não Identificada' && d.empresa !== 'Não identificado' && d.empresa !== '';
+      const placasValidas = d.placas && d.placas > 0;
+      if (!empresaValida || !placasValidas) {
+        console.log('[Salesbud] Descartado — campos insuficientes após análise Claude:', titulo, '| empresa:', d.empresa, '| placas:', d.placas);
+        return;
+      }
+
+      const empresa = d.empresa || 'Prospect';
+      const nomeArq = `[TESTE SALESBUD] Frota162 >< ${empresa} (Diretoria).pptx`;
+      const outPath = path.join(os.tmpdir(), nomeArq);
+
+      const sanitizeObjSb = (obj) => {
+        if (typeof obj === 'string') return sanitize(obj);
+        if (Array.isArray(obj)) return obj.map(sanitizeObjSb);
+        if (obj && typeof obj === 'object') { const r={}; for(const k of Object.keys(obj)) r[k]=sanitizeObjSb(obj[k]); return r; }
+        return obj;
+      };
+      const dClean = sanitizeObjSb(d);
+      await gerarPPTX(dClean, outPath);
+
+      const pastaId = process.env.PASTA_RAIZ_ID;
+      const uploaded = await drive.files.create({
+        supportsAllDrives: true,
+        requestBody: { name: nomeArq, parents: [pastaId], mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
+        media: { mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', body: fs.createReadStream(outPath) },
+        fields: 'id,name,webViewLink',
+      });
+      await drive.permissions.create({ fileId: uploaded.data.id, supportsAllDrives: true, requestBody: { role: 'writer', type: 'anyone' } });
+      fs.unlinkSync(outPath);
+
+      const tempEmoji = d.temperatura==='quente' ? '🔴' : d.temperatura==='morno' ? '🟡' : '🔵';
+      const slackId = getSlackId(executivo);
+      const execMencao = slackId ? `<@${slackId}>` : (executivo || 'N/A');
+      const roiAnual = d.roi_anual || 0;
+      const roiTexto = roiAnual > 0 ? `R$${Math.round(roiAnual).toLocaleString('pt-BR')}/ano` : 'A calcular';
+
+      const msg = `:car: *[TESTE SALESBUD] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+
+      await postSlack(msg, process.env.SALESBUD_TEST_SLACK_WEBHOOK_URL);
+
+      // Só marca sucesso definitivo depois do Slack confirmar entrega
+      await markProcessed(drive, callId);
+
+    } catch(err) {
+      console.error('[Salesbud] Background error:', err.message);
+      try {
+        await postSlack(`:warning: *[TESTE SALESBUD] Erro ao gerar material* — ${titulo||'Sem título'} (${executivo||'?'})\nMotivo: ${err.message}`, process.env.SALESBUD_TEST_SLACK_WEBHOOK_URL);
+      } catch(e2) {
+        console.error('[Salesbud] Falha ao avisar erro no Slack:', e2.message);
       }
     }
   })();
