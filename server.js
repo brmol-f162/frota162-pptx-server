@@ -1007,7 +1007,7 @@ app.post('/webhook/salesbud', (req, res) => {
 
       const scoreSalesbud = payload.analytics && payload.analytics.score != null ? payload.analytics.score : null;
       const justificativaScore = payload.analytics && payload.analytics.justification ? payload.analytics.justification : '';
-      const linhaScore = scoreSalesbud != null ? `\n- *Score Salesbud:* ${scoreSalesbud}/10${justificativaScore ? ' — ' + justificativaScore : ''}` : '';
+      const linhaScore = scoreSalesbud != null ? `\n- *Score Salesbud:* ${scoreSalesbud}/10` : '';
 
       const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}${linhaConcorrentes}${linhaScore}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
 
