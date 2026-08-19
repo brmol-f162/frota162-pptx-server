@@ -968,5 +968,40 @@ app.post('/webhook/salesbud', (req, res) => {
   })();
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// CHECKLIST DIÁRIO — disparado por um Render Cron Job separado, todo dia às
+// 22h (horário de Brasília). Mensagem fixa, sem lógica de agregação — só
+// lembra o Bruno de comparar Salesbud x Slack no fim do dia. Isolado de
+// tudo o resto: não usa Drive, Claude, nem toca nos outros pipelines.
+// ═══════════════════════════════════════════════════════════════════════
+const CHECKLIST_DIARIO = `📋 *Checklist diário — Salesbud × Slack*
+
+Use isso agora para confirmar que nenhuma call sumiu silenciosamente hoje.
+
+*1. Conta as reuniões "Frota162 ><" ou "Frota162 <>" de hoje na Salesbud*
+Para os 6 executivos (Bruno Pereira, Júlio Mazzetti, Palloma Santos, Rávila Silva, Thais Cristina, William Duarte), quantas reuniões concluídas aparecem hoje?
+→ Número A: ____
+
+*2. Conta as mensagens "[Salesbud]" no canal oficial hoje*
+Quantas mensagens "Novo material e análise estratégica" chegaram no #sales-slides-estrategicos hoje?
+→ Número B: ____
+
+*3. Bateu A = B?*
+✅ Se sim, dia limpo, não precisa investigar nada.
+⚠️ Se não, vai para o passo 4.
+
+*4. Para cada reunião sem mensagem correspondente:*
+Render → Logs → busca pelo nome do cliente ou título da reunião.
+- Nada com \`RECEBIDO\` → webhook não chegou (verificar do lado da Salesbud)
+- \`RECEBIDO\` sem \`SUCESSO\` → descartada por algum filtro (a linha seguinte diz qual)
+- \`RECEBIDO\` seguido de \`Background error\` → erro real, investigar`;
+
+app.post('/cron/checklist-diario', (req, res) => {
+  res.json({ ok: true });
+  postSlack(CHECKLIST_DIARIO, process.env.CHECKLIST_DM_WEBHOOK_URL)
+    .then(() => console.log('[Checklist] Enviado com sucesso'))
+    .catch(e => console.error('[Checklist] Falha ao enviar:', e.message));
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Frota162 PPTX Server v15 (Service para ate 40 placas + slide dedicado + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
