@@ -24,6 +24,56 @@ function getDriveClient() {
   return google.drive({ version: 'v3', auth });
 }
 
+function getSheetsClient() {
+  const auth = new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  });
+  return google.sheets({ version: 'v4', auth });
+}
+
+// Salva a transcrição completa em .txt no Drive e retorna o link — usado tanto
+// como backup individual quanto como referência na planilha de histórico.
+async function salvarTranscricaoDrive(drive, titulo, dataCallFormatada, executivo, callId, transcricao) {
+  const dataPrefixo = (dataCallFormatada||'').slice(0,10) || 'sem-data';
+  const nomeArq = `${dataPrefixo} - ${titulo}.txt`;
+  const conteudo = `TITULO: ${titulo}\nDATA: ${dataCallFormatada}\nEXECUTIVO: ${executivo}\nCALL_ID: ${callId}\n\n${transcricao}`;
+  const pastaId = process.env.PASTA_RAIZ_ID;
+
+  const uploaded = await drive.files.create({
+    supportsAllDrives: true,
+    requestBody: { name: nomeArq, parents: [pastaId], mimeType: 'text/plain' },
+    media: { mimeType: 'text/plain', body: conteudo },
+    fields: 'id,webViewLink',
+  });
+  await drive.permissions.create({
+    fileId: uploaded.data.id, supportsAllDrives: true,
+    requestBody: { role: 'writer', type: 'anyone' },
+  });
+  return uploaded.data.webViewLink;
+}
+
+// Grava uma linha no histórico consultável (Google Sheets). Não bloqueia o
+// pipeline se falhar (planilha não configurada, sem permissão, API desativada
+// etc.) — só loga o erro e segue. Colunas fixas, nesta ordem:
+// Data | Executivo | Empresa | Placas | Temperatura | ROI anual | Score Salesbud
+// | Concorrentes | Tags | Perfil do lead | Próximo passo | Link PPTX | Link Transcrição | Call ID
+async function salvarHistoricoPlanilha(linha) {
+  const spreadsheetId = process.env.SPREADSHEET_ID;
+  if (!spreadsheetId) {
+    console.log('[Salesbud] SPREADSHEET_ID não configurado — pulando gravação no histórico');
+    return;
+  }
+  const sheets = getSheetsClient();
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: 'A1',
+    valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: [linha] },
+  });
+}
+
 // Dois tipos de marcador:
 // - "claiming_" — temporário, só resolve corrida entre calls do MESMO lote (paralelismo).
 //   Não significa sucesso; várias podem existir e sumir sem problema.
@@ -887,6 +937,16 @@ app.post('/webhook/salesbud', (req, res) => {
         return;
       }
 
+      // Salva a transcrição em .txt no Drive — ANTES do Claude, para termos o
+      // registro mesmo que a análise ou o PPTX falhem depois. Falha ao salvar
+      // não bloqueia o resto do pipeline (só loga e segue).
+      let linkTranscricao = '';
+      try {
+        linkTranscricao = await salvarTranscricaoDrive(drive, titulo, dataCallFormatada, executivo, callId, transcricao);
+      } catch(e) {
+        console.error('[Salesbud] Falha ao salvar transcrição no Drive (não bloqueante):', e.message);
+      }
+
       // customerName/company já vêm estruturados da Salesbud — passamos como contexto
       // extra pro Claude, complementando (não substituindo) a extração pela transcrição.
       const contextoExtra = `Nome/email do cliente (Salesbud): ${payload.customerName||'não informado'}\nEmpresa/domínio (Salesbud): ${payload.company||'não informado'}\n\n`;
@@ -953,6 +1013,30 @@ app.post('/webhook/salesbud', (req, res) => {
 
       console.log(`[Salesbud] SUCESSO — titulo:"${titulo}" empresa:"${empresa}" placas:${d.placas} executivo:${executivo}`);
       await postSlack(msg, process.env.SLACK_WEBHOOK_URL);
+
+      // Grava linha no histórico consultável (Google Sheets). Não bloqueia o
+      // pipeline se falhar — a mensagem no Slack e o PPTX já foram entregues.
+      const tags = (payload.context && Array.isArray(payload.context.tags)) ? payload.context.tags : [];
+      try {
+        await salvarHistoricoPlanilha([
+          dataCallFormatada,
+          executivo,
+          empresa,
+          d.placas || 0,
+          d.temperatura || '',
+          roiAnual || 0,
+          scoreSalesbud != null ? scoreSalesbud : '',
+          concorrentes.join(', '),
+          tags.join(', '),
+          d.perfil_lead || '',
+          d.proximo_passo || '',
+          uploaded.data.webViewLink,
+          linkTranscricao,
+          callId,
+        ]);
+      } catch(e) {
+        console.error('[Salesbud] Falha ao gravar no histórico da planilha (não bloqueante):', e.message);
+      }
 
       // Só marca sucesso definitivo depois do Slack confirmar entrega
       await markProcessed(drive, callId);
