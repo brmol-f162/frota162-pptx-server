@@ -801,6 +801,13 @@ app.post('/webhook/salesbud', (req, res) => {
 
       const payload = JSON.parse(rawBody);
 
+      // LOG INCONDICIONAL — dispara SEMPRE que um webhook chega, antes de qualquer
+      // filtro. É a evidência definitiva de "o webhook chegou" independente do que
+      // acontecer depois (sucesso, descarte ou erro). Buscar por "RECEBIDO" no log
+      // do Render é a forma confiável de confirmar chegada — nunca buscar pelo nome
+      // da empresa, que só existe DEPOIS da análise do Claude e nunca era logado.
+      console.log(`[Salesbud] RECEBIDO — id:${payload.id} titulo:"${payload.title||''}" userId:${payload.userId} status:${payload.status} isExternal:${payload.isExternal} meetingAt:${payload.meetingAt}`);
+
       // Só processamos o payload de "Reunião" (tem transcription + meetingAt).
       // Payloads de VoIP/WhatsApp são ignorados nesta primeira fase.
       if (!payload.transcription || !payload.meetingAt) {
@@ -932,8 +939,19 @@ app.post('/webhook/salesbud', (req, res) => {
       const roiAnual = d.roi_anual || 0;
       const roiTexto = roiAnual > 0 ? `R$${Math.round(roiAnual).toLocaleString('pt-BR')}/ano` : 'A calcular';
 
-      const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+      // Ponto 1 (feedback do Bruno): a Salesbud já entrega concorrentes mencionados
+      // e um score de qualidade da call — puxamos direto do payload (não precisa do
+      // Claude extrair de novo) e só adicionamos a linha quando há dado real.
+      const concorrentes = (payload.context && Array.isArray(payload.context.competitorMentions)) ? payload.context.competitorMentions : [];
+      const linhaConcorrentes = concorrentes.length > 0 ? `\n- *Concorrente mencionado:* ${concorrentes.join(', ')}` : '';
 
+      const scoreSalesbud = payload.analytics && payload.analytics.score != null ? payload.analytics.score : null;
+      const justificativaScore = payload.analytics && payload.analytics.justification ? payload.analytics.justification : '';
+      const linhaScore = scoreSalesbud != null ? `\n- *Score Salesbud:* ${scoreSalesbud}/10${justificativaScore ? ' — ' + justificativaScore : ''}` : '';
+
+      const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}${linhaConcorrentes}${linhaScore}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+
+      console.log(`[Salesbud] SUCESSO — titulo:"${titulo}" empresa:"${empresa}" placas:${d.placas} executivo:${executivo}`);
       await postSlack(msg, process.env.SLACK_WEBHOOK_URL);
 
       // Só marca sucesso definitivo depois do Slack confirmar entrega
