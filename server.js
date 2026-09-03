@@ -584,6 +584,17 @@ function gerarPPTX(d, outPath) {
 }
 
 // Remove emojis e chars especiais que quebram pptxgenjs
+// Remove caracteres que quebram caminhos de arquivo (barras, dois-pontos, etc.)
+// Bug real encontrado: nome de empresa com "/" (ex: "FM Rodrigues / Salfena")
+// fazia o sistema de arquivos interpretar como subpasta inexistente -> ENOENT.
+function sanitizeFileName(str) {
+  if (!str) return 'Prospect';
+  return String(str)
+    .replace(/[\/\\:*?"<>|]/g, '-')  // caracteres proibidos em nomes de arquivo -> hífen
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function sanitize(str) {
   if (!str) return '';
   return String(str)
@@ -713,7 +724,7 @@ app.post('/generate', (req, res) => {
       }
 
       const empresa = d.empresa || 'Prospect';
-      const nomeArq = `Frota162 >< ${empresa} (Diretoria).pptx`;
+      const nomeArq = `Frota162 >< ${sanitizeFileName(empresa)} (Diretoria).pptx`;
       const outPath = path.join(os.tmpdir(), nomeArq);
 
       const sanitizeObj = (obj) => {
@@ -978,7 +989,7 @@ app.post('/webhook/salesbud', (req, res) => {
       }
 
       const empresa = d.empresa || 'Prospect';
-      const nomeArq = `Frota162 >< ${empresa} (Diretoria).pptx`;
+      const nomeArq = `Frota162 >< ${sanitizeFileName(empresa)} (Diretoria).pptx`;
       const outPath = path.join(os.tmpdir(), nomeArq);
 
       const sanitizeObjSb = (obj) => {
@@ -1100,4 +1111,4 @@ app.post('/cron/checklist-diario', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v15 (Service para ate 40 placas + slide dedicado + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v25 (sanitiza nome arquivo + concorrencia+contra-arg + planilha historico + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
