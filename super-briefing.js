@@ -139,6 +139,18 @@ Você monta o "Super Briefing" que o Executivo de Vendas da Frota162 lê ANTES
 da call com o lead. O resultado vai direto num campo do Deal no HubSpot.
 
 REGRAS INEGOCIÁVEIS:
+- TAMANHO MÁXIMO: o texto final inteiro (as 3 seções somadas) não pode passar
+  de 2.500 caracteres. O Executivo lê isso em pé, antes de entrar na call —
+  não é um relatório, é um resumo tático. Se sobrar informação, corte a menos
+  relevante; não afine a fonte nem espreme linhas — reduza o conteúdo mesmo.
+- Bullets curtos (uma linha cada), nunca parágrafos corridos. Sem introdução,
+  sem "vamos analisar", sem repetir o que já está óbvio no nome do campo.
+- Cada seção tem um teto: "Observações do Pré-Vendas" resume em até 4-5
+  bullets (não copia a observação inteira palavra por palavra se for longa —
+  resume mantendo os fatos). "Contexto de Mercado" no máximo 2-3 pontos.
+  "Estratégia para a Call" no máximo 4-5 bullets, só os mais relevantes pro
+  perfil deste deal específico — não lista todas as regras do system prompt,
+  só as que se aplicam.
 - NUNCA cite nome de plano (Enterprise 1/2/3), preço ou percentual de
   desconto. O objetivo é dar direcionamento estratégico, não cotação.
 - Toda notícia ou dado de mercado vem com o link da fonte ao lado, entre
@@ -187,7 +199,8 @@ ESTRUTURA DO TEXTO, NESSA ORDEM:
      preliminar, a validar na call" — nunca como número fechado.
 
 Escreva em português, direto, sem enrolação. O Executivo vai ler isso em
-menos de 2 minutos antes de entrar na call.
+menos de 2 minutos antes de entrar na call. Prefira cortar informação a
+estourar o limite de 2.500 caracteres.
 `.trim();
 
 // ----------------------------------------------------------------------------
@@ -265,6 +278,15 @@ Monte o Super Briefing seguindo a estrutura definida no system prompt.
       (data.content || []).map(b => b.type).join(', ') || '(nenhum)'
     );
     throw new Error(`Resposta vazia da Anthropic (stop_reason: ${data.stop_reason})`);
+  }
+
+  // Rede de segurança: HubSpot aceita até 65.536 caracteres em multi-line
+  // text. O prompt já pede até 2.500, isso aqui é só para o caso raro do
+  // modelo estourar — corta com aviso em vez de deixar o PATCH falhar.
+  const LIMITE_SEGURANCA = 60000;
+  if (texto.length > LIMITE_SEGURANCA) {
+    console.error(`HUBSPOT_DEAL: texto com ${texto.length} caracteres, truncando para ${LIMITE_SEGURANCA}`);
+    return texto.slice(0, LIMITE_SEGURANCA) + '\n\n[...texto truncado — passou do limite de segurança]';
   }
 
   return texto;
