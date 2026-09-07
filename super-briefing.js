@@ -162,62 +162,29 @@ async function hubspotSearchDeals(filters, properties, limit) {
   return resultado.results || [];
 }
 
-// Faixas alinhadas com a tabela de preços já usada no resto da Frota162
-function faixaDePlacas(placas) {
-  const n = Number(placas);
+// Estimativa de multas/NIC por fórmula fixa (validada pelo Bruno) — NÃO tira
+// mais média do histórico de deals fechados: o campo quantidade_de_multas_mensais
+// no HubSpot tem lixo de digitação (gente lançando total anual como se fosse
+// mensal, etc.) e produzia número absurdo (ex: 111 multas/mês pra 8 placas).
+// Fórmula: 0,8 multas/placa/mês, R$220 valor médio de multa, 30% delas viram
+// NIC (valor dobrado).
+const TAXA_MULTAS_POR_PLACA = 0.8;
+const VALOR_MEDIO_MULTA = 220;
+const TAXA_NIC = 0.30;
+
+function calcularEstimativaMultas(placasTotais) {
+  const n = Number(placasTotais);
   if (!n || n <= 0) return null;
-  if (n <= 40) return [1, 40];
-  if (n <= 99) return [41, 99];
-  if (n <= 199) return [100, 199];
-  if (n <= 299) return [200, 299];
-  if (n <= 399) return [300, 399];
-  if (n <= 499) return [400, 499];
-  if (n <= 999) return [500, 999];
-  return [1000, 999999];
-}
 
-async function buscarBenchmarkPlacas(placasTotais) {
-  const faixa = faixaDePlacas(placasTotais);
-  if (!faixa) return null;
-  const [min, max] = faixa;
-
-  const filters = [
-    ...FILTRO_CLIENTE_ATIVO,
-    { propertyName: 'placas_totais_do_contrato', operator: 'HAS_PROPERTY' },
-    { propertyName: 'quantidade_de_multas_mensais', operator: 'HAS_PROPERTY' },
-  ];
-  const deals = await hubspotSearchDeals(
-    filters,
-    ['placas_totais_do_contrato', 'quantidade_de_multas_mensais', 'valor_infracoes_adm'],
-    200
-  );
-
-  // Filtra pela faixa e calcula as médias no próprio código — mais simples e
-  // confiável do que tentar acertar o operador BETWEEN da Search API.
-  const naFaixa = deals
-    .map(d => ({
-      placas: Number(d.properties.placas_totais_do_contrato),
-      multas: Number(d.properties.quantidade_de_multas_mensais),
-      valor: Number(d.properties.valor_infracoes_adm),
-    }))
-    .filter(d => d.placas >= min && d.placas <= max && !isNaN(d.multas));
-
-  if (naFaixa.length < 5) return null; // amostra pequena demais pra ser útil
-
-  const mediaMultas = naFaixa.reduce((soma, d) => soma + d.multas, 0) / naFaixa.length;
-
-  // Valor em R$ nem sempre está preenchido — calcula a média só com quem tem,
-  // e só reporta se sobrar amostra suficiente pra não virar número solto.
-  const comValor = naFaixa.filter(d => !isNaN(d.valor) && d.valor > 0);
-  const mediaValor = comValor.length >= 5
-    ? comValor.reduce((soma, d) => soma + d.valor, 0) / comValor.length
-    : null;
+  const multasMes = n * TAXA_MULTAS_POR_PLACA;
+  const nicMes = multasMes * TAXA_NIC;
+  const multasNormaisMes = multasMes - nicMes;
+  const valorMes = (multasNormaisMes * VALOR_MEDIO_MULTA) + (nicMes * VALOR_MEDIO_MULTA * 2);
 
   return {
-    faixa: `${min}-${max === 999999 ? '1000+' : max} placas`,
-    amostra: naFaixa.length,
-    mediaMultasMes: mediaMultas.toFixed(1),
-    mediaValorMultasMes: mediaValor ? mediaValor.toFixed(2) : null,
+    multasMes: multasMes.toFixed(1),
+    nicMes: nicMes.toFixed(1),
+    valorMes: valorMes.toFixed(2),
   };
 }
 
@@ -269,6 +236,11 @@ sobre o concorrente. Se nenhum concorrente for mencionado, não crie esse
 bloco (não force).
 
 REGRAS INEGOCIÁVEIS:
+- FORMATO DE SAÍDA: a resposta é SOMENTE o conteúdo final das 3 seções.
+  NUNCA narre o processo — sem frases tipo "vou buscar", "encontrei",
+  "agora vou montar o briefing". Se você usar busca ou fetch, isso acontece
+  em silêncio; a única coisa que aparece na resposta final é o resultado
+  já pronto, direto na primeira linha.
 - TAMANHO MÁXIMO: o texto final inteiro (as 3 seções somadas) não pode passar
   de 2.500 caracteres. O Executivo lê isso em pé, antes de entrar na call —
   não é um relatório, é um resumo tático. Se sobrar informação, corte a menos
@@ -329,10 +301,10 @@ ESTRUTURA DO TEXTO, NESSA ORDEM:
    - quantidade_de_multas_mensais disponível → pode citar como estimativa
      preliminar de economia, rotulada explicitamente "estimativa
      preliminar, a validar na call" — nunca como número fechado.
-   - Se vier "Benchmark real Frota162" no contexto: use como simulação pro
+   - Se vier "Estimativa Frota162" no contexto: use como simulação pro
      Executivo apresentar quando o CLIENTE não souber o próprio número de
-     multas — sempre deixando explícito que é média de empresas atendidas
-     na mesma faixa de placas, nunca apresentado como o dado exato dele.
+     multas — sempre deixando explícito que é estimativa de mercado (não o
+     dado exato dele), incluindo a parte de NIC quando fizer sentido.
    - Se vier "Clientes ativos da Frota162 na mesma UF": cite os nomes como
      prova social regional (ex: "já atendemos [empresas] na sua região"),
      só se fizer sentido no fluxo da estratégia — não force.
@@ -356,16 +328,9 @@ async function chamarClaudeSuperBriefing(dealData, fonteEmpresa) {
   // HubSpot (não SIA/Athena). Falha aqui é engolida — não derruba o resto do
   // briefing por causa de uma seção opcional.
   let contextoBenchmark = '';
-  try {
-    const benchmark = await buscarBenchmarkPlacas(props.placas_totais_do_contrato);
-    if (benchmark) {
-      const parteValor = benchmark.mediaValorMultasMes
-        ? `, valor médio de multas R$${benchmark.mediaValorMultasMes}/mês`
-        : '';
-      contextoBenchmark += `\nBenchmark real Frota162 (clientes ativos, faixa ${benchmark.faixa}, amostra de ${benchmark.amostra} contas): média de ${benchmark.mediaMultasMes} multas/mês${parteValor}. Use isso SÓ como estimativa preliminar de simulação pro Executivo levar à call, deixando claro ao cliente que é média geral de empresas atendidas, não o número exato dele. NÃO mencione NIC aqui — não há dado histórico confiável para isso ainda.\n`;
-    }
-  } catch (e) {
-    console.error('HUBSPOT_DEAL: falha ao buscar benchmark de placas (não bloqueante):', e.message);
+  const estimativa = calcularEstimativaMultas(props.placas_totais_do_contrato);
+  if (estimativa) {
+    contextoBenchmark += `\nEstimativa Frota162 (fórmula: 0,8 multas/placa/mês, R$${VALOR_MEDIO_MULTA} valor médio, ${Math.round(TAXA_NIC * 100)}% viram NIC com valor dobrado) para ${props.placas_totais_do_contrato} placas: ~${estimativa.multasMes} multas/mês (das quais ~${estimativa.nicMes} NIC), ~R$${estimativa.valorMes}/mês em multas. Use isso SÓ quando o cliente não souber seus próprios números, como estimativa preliminar de simulação — deixando claro que é uma média de mercado, não o número exato dele.\n`;
   }
 
   try {
