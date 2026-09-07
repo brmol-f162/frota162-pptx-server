@@ -6,6 +6,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { registrarRotaSuperBriefing } = require('./super-briefing');
 
 const app = express();
 app.use(express.text({ type: '*/*', limit: '50mb' }));
@@ -1109,6 +1110,9 @@ app.post('/cron/checklist-diario', (req, res) => {
     .then(() => console.log('[Checklist] Enviado com sucesso'))
     .catch(e => console.error('[Checklist] Falha ao enviar:', e.message));
 });
+
+// ==== SUPER BRIEFING (HubSpot) — não mexe na lógica do Salesbud/Elephan acima ====
+registrarRotaSuperBriefing(app, getDriveClient, claimCall, markProcessed);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Frota162 PPTX Server v25 (sanitiza nome arquivo + concorrencia+contra-arg + planilha historico + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
