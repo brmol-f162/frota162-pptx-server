@@ -6,7 +6,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { registrarRotaSuperBriefing } = require('./super-briefing');
+const { registrarRotaSuperBriefing, registrarRotaPolling } = require('./super-briefing');
 
 const app = express();
 app.use(express.text({ type: '*/*', limit: '50mb' }));
@@ -1113,6 +1113,7 @@ app.post('/cron/checklist-diario', (req, res) => {
 
 // ==== SUPER BRIEFING (HubSpot) — não mexe na lógica do Salesbud/Elephan acima ====
 registrarRotaSuperBriefing(app, getDriveClient, claimCall, markProcessed);
+registrarRotaPolling(app);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Frota162 PPTX Server v25 (sanitiza nome arquivo + concorrencia+contra-arg + planilha historico + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
