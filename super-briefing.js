@@ -273,7 +273,7 @@ async function salvarBriefingNoDeal(dealId, corpoTexto) {
 // 6. Rota — cola isto no server.js, dentro do escopo onde `app`, `drive`,
 //    `claimCall` e `markProcessed` já existem
 // ----------------------------------------------------------------------------
-function registrarRotaSuperBriefing(app, drive, claimCall, markProcessed) {
+function registrarRotaSuperBriefing(app, getDriveClient, claimCall, markProcessed) {
   app.post('/webhook/hubspot-novo-deal', (req, res) => {
     res.sendStatus(200); // responde na hora, processa em background (mesmo padrão do /webhook/salesbud)
 
@@ -288,6 +288,8 @@ function registrarRotaSuperBriefing(app, drive, claimCall, markProcessed) {
         }
 
         console.log('HUBSPOT_DEAL RECEBIDO', dealId);
+
+        const drive = getDriveClient(); // mesmo padrão do /webhook/salesbud: instancia por request
 
         const devoProcessar = await claimCall(drive, `hs_${dealId}`);
         if (!devoProcessar) {
