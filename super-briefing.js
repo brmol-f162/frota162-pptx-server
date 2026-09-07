@@ -231,7 +231,7 @@ Monte o Super Briefing seguindo a estrutura definida no system prompt.
     },
     body: JSON.stringify({
       model: CLAUDE_MODEL,
-      max_tokens: 2000,
+      max_tokens: 4000,
       system: SYSTEM_PROMPT,
       tools: [
         { type: 'web_search_20250305', name: 'web_search', max_uses: MAX_BUSCAS },
@@ -247,11 +247,27 @@ Monte o Super Briefing seguindo a estrutura definida no system prompt.
   }
 
   const data = await res.json();
-  return (data.content || [])
+  const texto = (data.content || [])
     .filter(b => b.type === 'text')
     .map(b => b.text)
     .join('\n')
     .trim();
+
+  // Não deixar gravar vazio em silêncio — se não veio texto final, o motivo
+  // mais comum é max_tokens estourado no meio do uso de ferramentas
+  // (stop_reason 'max_tokens'). Loga o suficiente pra diagnosticar sem
+  // precisar adivinhar da próxima vez.
+  if (!texto) {
+    console.error(
+      'HUBSPOT_DEAL: resposta da Anthropic sem texto final. stop_reason:',
+      data.stop_reason,
+      '| tipos de bloco recebidos:',
+      (data.content || []).map(b => b.type).join(', ') || '(nenhum)'
+    );
+    throw new Error(`Resposta vazia da Anthropic (stop_reason: ${data.stop_reason})`);
+  }
+
+  return texto;
 }
 
 // ----------------------------------------------------------------------------
