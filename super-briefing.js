@@ -245,6 +245,11 @@ Monte o Super Briefing seguindo a estrutura definida no system prompt.
     body: JSON.stringify({
       model: CLAUDE_MODEL,
       max_tokens: 4000,
+      thinking: { type: 'disabled' }, // não precisamos de raciocínio estendido aqui —
+      // sem isso, o Sonnet 5 gasta parte do max_tokens em "thinking" (modo adaptativo
+      // é o padrão do modelo) antes mesmo de chegar no texto final, e o orçamento
+      // pode acabar no meio do uso das ferramentas (foi o que causou o stop_reason
+      // 'max_tokens' sem nenhum texto de resposta).
       system: SYSTEM_PROMPT,
       tools: [
         { type: 'web_search_20250305', name: 'web_search', max_uses: MAX_BUSCAS },
