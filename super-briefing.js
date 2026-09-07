@@ -279,13 +279,19 @@ REGRAS INEGOCIÁVEIS:
 ESTRUTURA DO TEXTO, NESSA ORDEM:
 
 1. "Observações do Pré-Vendas"
-   Consolide o texto bruto recebido (pode vir de mais de uma Nota, inclusive
-   de preenchimento de formulário) de forma organizada, sem reescrever o que
-   já foi dito.
+   Reescreva em texto limpo e bem formatado — NÃO copie quebras de linha
+   ruins ou frases cortadas no meio vindas da Nota original (fonte pode ter
+   sido colada de outro lugar com formatação quebrada). Frases completas,
+   bullets quando fizer sentido, nunca uma sentença partida em várias linhas
+   soltas. Preserve os FATOS exatamente como estão, só conserte a forma.
+   Corte linhas de checklist administrativo sem conteúdo de venda (ex:
+   "Tripé Contato/Empresa/Negócio confirmado" ou variações de confirmação
+   de checklist interno) — isso não ajuda o Executivo, é ruído de processo.
 
 2. "Contexto de Mercado"
    Notícia de segmento e, quando existir, notícia específica da empresa —
-   sempre com link. Registre explicitamente quando não achar nada.
+   sempre com link. Se não achar nada relevante, omita a seção ou o ponto
+   em silêncio (mesma regra do topo do prompt) — NUNCA registre a ausência.
 
 3. "Estratégia para a Call"
    Pontos táticos para o Executivo, SEM citar plano ou preço:
@@ -296,9 +302,11 @@ ESTRUTURA DO TEXTO, NESSA ORDEM:
      varredura automática dos robôs e trava a integração com o SNE —
      antecipar isso como possível ponto de atrito, não só reagir se o
      cliente trouxer.
-   - placas_totais_do_contrato baixo + indício de pouca estrutura de gestão
-     própria → reforçar o diferencial de a Frota162 operar a rotina
-     documental pelo cliente (sem citar nome de produto).
+   - placas_totais_do_contrato MENOR OU IGUAL A 40 (regra dura, sem exceção
+     e sem generalizar pra faixas maiores) → reforçar o diferencial de a
+     Frota162 operar a rotina documental pelo cliente (sem citar nome de
+     produto). ACIMA de 40 placas, NUNCA mencione isso como opção — não é
+     elegível, ponto final, independente de outros sinais no deal.
    - autoridade_do_lead indicando que o contato NÃO é decisor final E volume
      de placas alto → instruir o Executivo a mapear e trazer o decisor real
      antes de avançar qualquer proposta. Isso vem antes de qualquer
@@ -336,6 +344,7 @@ const PADROES_NARRACAO = [
   /\bn[ãa]o\s+(foi\s+poss[íi]vel|h[aá])\s+(encontrar|encontrada?s?|not[íi]cia)/i,
   /\bsigo\s+com\b/i,
   /\bvou\s+(compor|montar)\s+o\s+briefing\b/i,
+  /\btrip[eé]\s+contato\/?empresa\/?neg[oó]cio\s+confirmad/i,
 ];
 
 function removerNarracao(texto) {
@@ -347,8 +356,79 @@ function removerNarracao(texto) {
     .trim();
 }
 
+// Quando uf_de_atuacao vem vazia do HubSpot, tenta inferir o estado via
+// pesquisa rápida (site/Instagram/busca pelo nome), pra ainda conseguir
+// rodar os case studies regionais. Chamada separada e barata (max_tokens
+// baixo, poucas buscas) — só roda quando realmente falta a UF.
+async function inferirUFViaPesquisa(props, fonteEmpresa) {
+  const contextoEmpresa = fonteEmpresa.tipo !== 'nenhuma'
+    ? `Fonte disponível (${fonteEmpresa.tipo}): ${fonteEmpresa.valor}.`
+    : '';
+  const userMsg = `
+Empresa: ${props.dealname || '(sem nome)'}
+${contextoEmpresa}
+Segmento/observação: ${props.motivo_da_dor || '-'}
+
+Pesquise rapidamente (site, Instagram, ou busca pelo nome da empresa) em qual
+estado brasileiro (UF) essa empresa atua ou está sediada. Responda SOMENTE
+com a sigla de 2 letras da UF (ex: SP, MG, RJ). Se não conseguir determinar
+com razoável confiança, responda exatamente DESCONHECIDO. Não escreva mais
+nada além disso — nem explicação, nem pontuação extra.
+`.trim();
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'web-fetch-2025-09-10',
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 300,
+      thinking: { type: 'disabled' },
+      tools: [
+        { type: 'web_search_20250305', name: 'web_search', max_uses: 2 },
+        { type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 1 }
+      ],
+      messages: [{ role: 'user', content: userMsg }]
+    })
+  });
+
+  if (!res.ok) return null;
+  const data = await res.json();
+  const content = data.content || [];
+  let textoFinal = [];
+  for (let i = content.length - 1; i >= 0; i--) {
+    if (content[i].type === 'text') textoFinal.unshift(content[i].text);
+    else break;
+  }
+  const resposta = textoFinal.join('').trim().toUpperCase();
+  const match = resposta.match(/\b([A-Z]{2})\b/);
+  if (!match) return null;
+
+  const UFS_VALIDAS = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
+  return UFS_VALIDAS.includes(match[1]) ? match[1] : null;
+}
+
 async function chamarClaudeSuperBriefing(dealData, fonteEmpresa) {
   const { props, observacoes } = dealData;
+
+  const COMPETIDORES_CONHECIDOS = [
+    'Beemon', 'Bluefleet', 'Broobot', 'Caça Multa', 'CertaDoc', 'Click Multas',
+    'DR Multa', 'EasyGo', 'Infleet', 'LW', 'Monaco', 'NSTech', 'Sem Parar',
+    'Smartec', 'Soluxlog', 'Ticket Log', 'Touc', 'Movic',
+  ];
+  const textoObservacoes = observacoes.join(' ');
+  const competidoresMencionados = COMPETIDORES_CONHECIDOS.filter(c =>
+    new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(textoObservacoes)
+  );
+  if (competidoresMencionados.length > 0) {
+    console.log('HUBSPOT_DEAL: concorrente(s) detectado(s) nas observações:', competidoresMencionados.join(', '));
+  } else {
+    console.log('HUBSPOT_DEAL: nenhum concorrente conhecido mencionado nas observações');
+  }
 
   const contextoEmpresa = fonteEmpresa.tipo !== 'nenhuma'
     ? `Fonte de empresa disponível (${fonteEmpresa.tipo}): ${fonteEmpresa.valor}. Use web_fetch nisso ANTES de gastar busca.`
@@ -364,9 +444,29 @@ async function chamarClaudeSuperBriefing(dealData, fonteEmpresa) {
   }
 
   try {
-    const cases = await buscarCaseStudiesRegionais(props.uf_de_atuacao, props.dealname);
-    if (cases.length > 0) {
-      contextoBenchmark += `\nClientes ativos da Frota162 na mesma UF (${props.uf_de_atuacao}): ${cases.join(', ')}. Pode citar como prova social regional se fizer sentido na estratégia.\n`;
+    let ufParaBusca = props.uf_de_atuacao;
+    let ufInferida = false;
+
+    if (!ufParaBusca) {
+      console.log('HUBSPOT_DEAL: uf_de_atuacao vazia — tentando inferir via pesquisa');
+      ufParaBusca = await inferirUFViaPesquisa(props, fonteEmpresa);
+      if (ufParaBusca) {
+        ufInferida = true;
+        console.log('HUBSPOT_DEAL: UF inferida via pesquisa:', ufParaBusca);
+      } else {
+        console.log('HUBSPOT_DEAL: não foi possível inferir UF via pesquisa — case study regional não roda');
+      }
+    }
+
+    if (ufParaBusca) {
+      const cases = await buscarCaseStudiesRegionais(ufParaBusca, props.dealname);
+      if (cases.length > 0) {
+        console.log(`HUBSPOT_DEAL: ${cases.length} case study(ies) encontrado(s) na UF ${ufParaBusca}${ufInferida ? ' (inferida)' : ''}:`, cases.join(', '));
+        const observacaoOrigem = ufInferida ? ', UF inferida via pesquisa — não confirmada no CRM' : '';
+        contextoBenchmark += `\nClientes ativos da Frota162 na mesma UF (${ufParaBusca}${observacaoOrigem}): ${cases.join(', ')}. Pode citar como prova social regional se fizer sentido na estratégia.\n`;
+      } else {
+        console.log(`HUBSPOT_DEAL: UF ${ufParaBusca} (${ufInferida ? 'inferida' : 'do CRM'}), mas nenhum cliente ativo encontrado nela`);
+      }
     }
   } catch (e) {
     console.error('HUBSPOT_DEAL: falha ao buscar case studies regionais (não bloqueante):', e.message);
