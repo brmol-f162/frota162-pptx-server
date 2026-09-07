@@ -238,9 +238,16 @@ bloco (não force).
 REGRAS INEGOCIÁVEIS:
 - FORMATO DE SAÍDA: a resposta é SOMENTE o conteúdo final das 3 seções.
   NUNCA narre o processo — sem frases tipo "vou buscar", "encontrei",
-  "agora vou montar o briefing". Se você usar busca ou fetch, isso acontece
-  em silêncio; a única coisa que aparece na resposta final é o resultado
-  já pronto, direto na primeira linha.
+  "agora vou montar o briefing", "nenhuma notícia foi encontrada", "sigo
+  com contexto de segmento", ou qualquer variação que descreva o que você
+  fez, achou ou não achou durante a pesquisa. Isso vale pra QUALQUER lugar
+  do texto, não só a primeira linha — inclusive dentro da seção de mercado.
+  ERRADO: "Nenhuma notícia específica sobre a [Empresa] foi encontrada —
+  sigo com contexto de segmento." CERTO: se não achou notícia específica,
+  a seção de mercado simplesmente começa direto com o contexto de segmento
+  que você tiver, sem qualquer frase de transição sobre a ausência. A
+  primeira linha da resposta é sempre o título da primeira seção ou o
+  primeiro bullet — nunca uma frase sobre o processo de pesquisa.
 - TAMANHO MÁXIMO: o texto final inteiro (as 3 seções somadas) não pode passar
   de 2.500 caracteres. O Executivo lê isso em pé, antes de entrar na call —
   não é um relatório, é um resumo tático. Se sobrar informação, corte a menos
@@ -317,6 +324,29 @@ estourar o limite de 2.500 caracteres.
 // ----------------------------------------------------------------------------
 // 4. Chamada à API da Anthropic (web_search + web_fetch na mesma request)
 // ----------------------------------------------------------------------------
+// Rede de segurança contra narração de processo que passa pelo prompt.
+// Remove linhas/frases que descrevem o que o modelo fez/achou/não achou
+// durante a pesquisa, em vez de conteúdo do briefing em si. Case-insensitive,
+// aplicado por sentença (separadas por ponto final ou quebra de linha) pra
+// não jogar fora o resto de um parágrafo só por causa de uma frase solta.
+const PADROES_NARRACAO = [
+  /\b(vou|agora vou|preciso|deixe-?me)\s+(buscar|pesquisar|montar|verificar|checar|analisar)\b/i,
+  /\bencontrei\b.{0,40}\b(dado|not[íi]cia|informa[çc][ãa]o|contexto)\b/i,
+  /\bnenhuma\s+not[íi]cia\b/i,
+  /\bn[ãa]o\s+(foi\s+poss[íi]vel|h[aá])\s+(encontrar|encontrada?s?|not[íi]cia)/i,
+  /\bsigo\s+com\b/i,
+  /\bvou\s+(compor|montar)\s+o\s+briefing\b/i,
+];
+
+function removerNarracao(texto) {
+  return texto
+    .split('\n')
+    .filter(linha => !PADROES_NARRACAO.some(re => re.test(linha)))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 async function chamarClaudeSuperBriefing(dealData, fonteEmpresa) {
   const { props, observacoes } = dealData;
 
@@ -411,12 +441,13 @@ Monte o Super Briefing seguindo a estrutura definida no system prompt.
     }
   }
   const texto = textoFinal.join('\n').trim();
+  const textoLimpo = removerNarracao(texto);
 
   // Não deixar gravar vazio em silêncio — se não veio texto final, o motivo
   // mais comum é max_tokens estourado no meio do uso de ferramentas
   // (stop_reason 'max_tokens'). Loga o suficiente pra diagnosticar sem
   // precisar adivinhar da próxima vez.
-  if (!texto) {
+  if (!textoLimpo) {
     console.error(
       'HUBSPOT_DEAL: resposta da Anthropic sem texto final. stop_reason:',
       data.stop_reason,
@@ -430,12 +461,12 @@ Monte o Super Briefing seguindo a estrutura definida no system prompt.
   // text. O prompt já pede até 2.500, isso aqui é só para o caso raro do
   // modelo estourar — corta com aviso em vez de deixar o PATCH falhar.
   const LIMITE_SEGURANCA = 60000;
-  if (texto.length > LIMITE_SEGURANCA) {
-    console.error(`HUBSPOT_DEAL: texto com ${texto.length} caracteres, truncando para ${LIMITE_SEGURANCA}`);
-    return texto.slice(0, LIMITE_SEGURANCA) + '\n\n[...texto truncado — passou do limite de segurança]';
+  if (textoLimpo.length > LIMITE_SEGURANCA) {
+    console.error(`HUBSPOT_DEAL: texto com ${textoLimpo.length} caracteres, truncando para ${LIMITE_SEGURANCA}`);
+    return textoLimpo.slice(0, LIMITE_SEGURANCA) + '\n\n[...texto truncado — passou do limite de segurança]';
   }
 
-  return texto;
+  return textoLimpo;
 }
 
 // ----------------------------------------------------------------------------
