@@ -45,6 +45,7 @@ const DEAL_PROPERTIES = [
   'quantidade_de_multas_mensais',
   'frota_propria',       // própria / terceirizada / mista
   'frota_pj_ou_pf',      // PJ / PF / mista
+  'uf_de_atuacao',       // já existe no HubSpot — usado pros case studies regionais
   'site_da_empresa',
   'instagram_da_empresa'
 ];
@@ -133,11 +134,139 @@ function resolverFonteEmpresa(props, emailContato) {
 }
 
 // ----------------------------------------------------------------------------
+// 2.5. Benchmark por faixa de placas + case studies regionais — via API de
+// BUSCA do próprio HubSpot (não via SIA/Athena). Os campos que precisamos
+// (uf_de_atuacao, hs_is_closed_won, data_de_churn, company_name,
+// placas_totais_do_contrato, quantidade_de_multas_mensais) já são properties
+// do próprio Deal — não precisa de infraestrutura nova nem de outro token,
+// reusa o mesmo HUBSPOT_TOKEN e fica mais em tempo real que a SIA (que só
+// espelha uma vez por dia).
+// ----------------------------------------------------------------------------
+
+// Filtro base reaproveitado nas duas buscas: cliente fechado ganho e sem
+// data de churn preenchida (ativo).
+const FILTRO_CLIENTE_ATIVO = [
+  { propertyName: 'hs_is_closed_won', operator: 'EQ', value: 'true' },
+  { propertyName: 'data_de_churn', operator: 'NOT_HAS_PROPERTY' },
+];
+
+async function hubspotSearchDeals(filters, properties, limit) {
+  const resultado = await hubspotFetch('/crm/v3/objects/deals/search', {
+    method: 'POST',
+    body: JSON.stringify({
+      filterGroups: [{ filters }],
+      properties,
+      limit: limit || 100,
+    }),
+  });
+  return resultado.results || [];
+}
+
+// Faixas alinhadas com a tabela de preços já usada no resto da Frota162
+function faixaDePlacas(placas) {
+  const n = Number(placas);
+  if (!n || n <= 0) return null;
+  if (n <= 40) return [1, 40];
+  if (n <= 99) return [41, 99];
+  if (n <= 199) return [100, 199];
+  if (n <= 299) return [200, 299];
+  if (n <= 399) return [300, 399];
+  if (n <= 499) return [400, 499];
+  if (n <= 999) return [500, 999];
+  return [1000, 999999];
+}
+
+async function buscarBenchmarkPlacas(placasTotais) {
+  const faixa = faixaDePlacas(placasTotais);
+  if (!faixa) return null;
+  const [min, max] = faixa;
+
+  const filters = [
+    ...FILTRO_CLIENTE_ATIVO,
+    { propertyName: 'placas_totais_do_contrato', operator: 'HAS_PROPERTY' },
+    { propertyName: 'quantidade_de_multas_mensais', operator: 'HAS_PROPERTY' },
+  ];
+  const deals = await hubspotSearchDeals(
+    filters,
+    ['placas_totais_do_contrato', 'quantidade_de_multas_mensais', 'valor_infracoes_adm'],
+    200
+  );
+
+  // Filtra pela faixa e calcula as médias no próprio código — mais simples e
+  // confiável do que tentar acertar o operador BETWEEN da Search API.
+  const naFaixa = deals
+    .map(d => ({
+      placas: Number(d.properties.placas_totais_do_contrato),
+      multas: Number(d.properties.quantidade_de_multas_mensais),
+      valor: Number(d.properties.valor_infracoes_adm),
+    }))
+    .filter(d => d.placas >= min && d.placas <= max && !isNaN(d.multas));
+
+  if (naFaixa.length < 5) return null; // amostra pequena demais pra ser útil
+
+  const mediaMultas = naFaixa.reduce((soma, d) => soma + d.multas, 0) / naFaixa.length;
+
+  // Valor em R$ nem sempre está preenchido — calcula a média só com quem tem,
+  // e só reporta se sobrar amostra suficiente pra não virar número solto.
+  const comValor = naFaixa.filter(d => !isNaN(d.valor) && d.valor > 0);
+  const mediaValor = comValor.length >= 5
+    ? comValor.reduce((soma, d) => soma + d.valor, 0) / comValor.length
+    : null;
+
+  return {
+    faixa: `${min}-${max === 999999 ? '1000+' : max} placas`,
+    amostra: naFaixa.length,
+    mediaMultasMes: mediaMultas.toFixed(1),
+    mediaValorMultasMes: mediaValor ? mediaValor.toFixed(2) : null,
+  };
+}
+
+async function buscarCaseStudiesRegionais(uf, nomeExcluir) {
+  if (!uf) return []; // só busca se a UF do novo deal estiver preenchida
+
+  const filters = [
+    ...FILTRO_CLIENTE_ATIVO,
+    { propertyName: 'uf_de_atuacao', operator: 'EQ', value: uf },
+  ];
+  const deals = await hubspotSearchDeals(filters, ['company_name'], 20);
+
+  const nomes = [...new Set(deals.map(d => d.properties.company_name).filter(Boolean))];
+  return nomes
+    .filter(nome => nome.toLowerCase() !== String(nomeExcluir || '').toLowerCase())
+    .slice(0, 5);
+}
+
+// ----------------------------------------------------------------------------
 // 3. System prompt — regras de negócio + guardrails
 // ----------------------------------------------------------------------------
 const SYSTEM_PROMPT = `
 Você monta o "Super Briefing" que o Executivo de Vendas da Frota162 lê ANTES
 da call com o lead. O resultado vai direto num campo do Deal no HubSpot.
+
+CONHECIMENTO DE BASE (use quando relevante, NUNCA explique o óbvio):
+O Executivo já sabe o que é NIC, ANTT, CONTRAN e como funciona notificação de
+multa. NÃO explique conceitos básicos. Use estes fatos regulatórios só quando
+a estratégia realmente pedir, de forma direta, sem aula:
+- Locadoras: a indicação de condutor é obrigação legal: atraso ou omissão
+  transfere a responsabilidade financeira da multa e da NIC para a própria
+  locadora (não para o condutor/cliente final).
+- Regra ANTT/CONTRAN de reincidência: o valor da NIC por não indicar condutor
+  é multiplicado pelo número de infrações iguais registradas em nome do
+  mesmo CNPJ nos últimos 12 meses — quanto mais reincidência, maior o
+  multiplicador. Use isso como argumento de urgência quando o perfil do
+  cliente sugerir alto volume ou reincidência, não como explicação genérica.
+
+COMPETIDORES CONHECIDOS (Beemon, Bluefleet, Broobot, Caça Multa, CertaDoc,
+Click Multas, DR Multa, EasyGo, Infleet, LW, Monaco, NSTech, Sem Parar,
+Smartec, Soluxlog, Ticket Log, Touc, Movic — "Solução própria" não conta como
+concorrente real): se qualquer um desses nomes aparecer nas observações do
+Pré-Vendas, monte um bloco DEDICADO "Concorrência" na Estratégia, com 2-3
+bullets de como contornar objeções esperadas desse concorrente específico.
+Base o contra-argumento SOMENTE nos diferenciais reais e verificáveis da
+Frota162 (SNE, Enterprise 3 completo, Service/BPO, especialista dedicado,
+preço transparente) — NUNCA invente ou afirme algo negativo não confirmado
+sobre o concorrente. Se nenhum concorrente for mencionado, não crie esse
+bloco (não force).
 
 REGRAS INEGOCIÁVEIS:
 - TAMANHO MÁXIMO: o texto final inteiro (as 3 seções somadas) não pode passar
@@ -200,6 +329,13 @@ ESTRUTURA DO TEXTO, NESSA ORDEM:
    - quantidade_de_multas_mensais disponível → pode citar como estimativa
      preliminar de economia, rotulada explicitamente "estimativa
      preliminar, a validar na call" — nunca como número fechado.
+   - Se vier "Benchmark real Frota162" no contexto: use como simulação pro
+     Executivo apresentar quando o CLIENTE não souber o próprio número de
+     multas — sempre deixando explícito que é média de empresas atendidas
+     na mesma faixa de placas, nunca apresentado como o dado exato dele.
+   - Se vier "Clientes ativos da Frota162 na mesma UF": cite os nomes como
+     prova social regional (ex: "já atendemos [empresas] na sua região"),
+     só se fizer sentido no fluxo da estratégia — não force.
 
 Escreva em português, direto, sem enrolação. O Executivo vai ler isso em
 menos de 2 minutos antes de entrar na call. Prefira cortar informação a
@@ -216,6 +352,31 @@ async function chamarClaudeSuperBriefing(dealData, fonteEmpresa) {
     ? `Fonte de empresa disponível (${fonteEmpresa.tipo}): ${fonteEmpresa.valor}. Use web_fetch nisso ANTES de gastar busca.`
     : 'Nenhum site, Instagram ou domínio de e-mail corporativo disponível para esta empresa — não gaste espaço mencionando essa ausência, apenas siga com o que houver de outras fontes.';
 
+  // Benchmark por faixa de placas + case studies regionais — busca direto no
+  // HubSpot (não SIA/Athena). Falha aqui é engolida — não derruba o resto do
+  // briefing por causa de uma seção opcional.
+  let contextoBenchmark = '';
+  try {
+    const benchmark = await buscarBenchmarkPlacas(props.placas_totais_do_contrato);
+    if (benchmark) {
+      const parteValor = benchmark.mediaValorMultasMes
+        ? `, valor médio de multas R$${benchmark.mediaValorMultasMes}/mês`
+        : '';
+      contextoBenchmark += `\nBenchmark real Frota162 (clientes ativos, faixa ${benchmark.faixa}, amostra de ${benchmark.amostra} contas): média de ${benchmark.mediaMultasMes} multas/mês${parteValor}. Use isso SÓ como estimativa preliminar de simulação pro Executivo levar à call, deixando claro ao cliente que é média geral de empresas atendidas, não o número exato dele. NÃO mencione NIC aqui — não há dado histórico confiável para isso ainda.\n`;
+    }
+  } catch (e) {
+    console.error('HUBSPOT_DEAL: falha ao buscar benchmark de placas (não bloqueante):', e.message);
+  }
+
+  try {
+    const cases = await buscarCaseStudiesRegionais(props.uf_de_atuacao, props.dealname);
+    if (cases.length > 0) {
+      contextoBenchmark += `\nClientes ativos da Frota162 na mesma UF (${props.uf_de_atuacao}): ${cases.join(', ')}. Pode citar como prova social regional se fizer sentido na estratégia.\n`;
+    }
+  } catch (e) {
+    console.error('HUBSPOT_DEAL: falha ao buscar case studies regionais (não bloqueante):', e.message);
+  }
+
   const userMsg = `
 DEAL: ${props.dealname || '(sem nome)'}
 Origem / Sub-origem: ${props.origem || '-'} / ${props.sub_origem || '-'}
@@ -228,7 +389,7 @@ Aderente ao SNE: ${props.aderente_sne || '-'}
 Multas mensais: ${props.quantidade_de_multas_mensais || '-'}
 
 ${contextoEmpresa}
-
+${contextoBenchmark}
 OBSERVAÇÕES ORIGINAIS DO PRÉ-VENDAS (ordem cronológica):
 ${observacoes.length
     ? observacoes.map((o, i) => `[Nota ${i + 1}]\n${o}`).join('\n\n')
