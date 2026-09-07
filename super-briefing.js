@@ -394,11 +394,23 @@ Monte o Super Briefing seguindo a estrutura definida no system prompt.
   }
 
   const data = await res.json();
-  const texto = (data.content || [])
-    .filter(b => b.type === 'text')
-    .map(b => b.text)
-    .join('\n')
-    .trim();
+  const content = data.content || [];
+
+  // FIX: não juntar todo bloco de texto da resposta. O modelo escreve texto
+  // NORMALMENTE entre usos de ferramenta (ex: "vou buscar X", "encontrei Y")
+  // — isso é comportamento padrão de tool-use, não desobediência ao prompt.
+  // Pega só a sequência de blocos de texto do FINAL (depois do último uso de
+  // ferramenta), que é a resposta de verdade; descarta qualquer texto que
+  // veio antes disso.
+  let textoFinal = [];
+  for (let i = content.length - 1; i >= 0; i--) {
+    if (content[i].type === 'text') {
+      textoFinal.unshift(content[i].text);
+    } else {
+      break;
+    }
+  }
+  const texto = textoFinal.join('\n').trim();
 
   // Não deixar gravar vazio em silêncio — se não veio texto final, o motivo
   // mais comum é max_tokens estourado no meio do uso de ferramentas
@@ -409,7 +421,7 @@ Monte o Super Briefing seguindo a estrutura definida no system prompt.
       'HUBSPOT_DEAL: resposta da Anthropic sem texto final. stop_reason:',
       data.stop_reason,
       '| tipos de bloco recebidos:',
-      (data.content || []).map(b => b.type).join(', ') || '(nenhum)'
+      (content || []).map(b => b.type).join(', ') || '(nenhum)'
     );
     throw new Error(`Resposta vazia da Anthropic (stop_reason: ${data.stop_reason})`);
   }
