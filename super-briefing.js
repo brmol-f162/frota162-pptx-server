@@ -544,7 +544,7 @@ function registrarRotaSuperBriefing(app, getDriveClient, claimCall, markProcesse
 // falhar, o próximo ciclo tenta de novo sozinho, sem precisar de marcador
 // manual como no fluxo por webhook.
 // ----------------------------------------------------------------------------
-function registrarRotaPolling(app) {
+function registrarRotaPolling(app, getDriveClient, claimCall, markProcessed) {
   const handler = (req, res) => {
     res.json({ ok: true, status: 'processing' });
 
@@ -568,17 +568,30 @@ function registrarRotaPolling(app) {
         }
         console.log(`HUBSPOT_DEAL_POLL: ${deals.length} deal(s) pendente(s) —`, deals.map(d => d.id).join(', '));
 
+        const drive = getDriveClient();
+
         for (const deal of deals) {
           try {
+            // Trava atômica — evita processar o mesmo deal duas vezes quando
+            // dois ciclos do polling caem muito próximos (ex: dois monitores
+            // de uptime, ou um ciclo que ainda não terminou de gravar quando
+            // o próximo já rodou).
+            const devoProcessar = await claimCall(drive, `hs_poll_${deal.id}`);
+            if (!devoProcessar) {
+              console.log('HUBSPOT_DEAL_POLL já sendo processado por outro ciclo, pulando', deal.id);
+              continue;
+            }
+
             const dealData = await buscarDealCompleto(deal.id);
             const fonteEmpresa = resolverFonteEmpresa(dealData.props, dealData.emailContato);
             const briefing = await chamarClaudeSuperBriefing(dealData, fonteEmpresa);
             await salvarBriefingNoDeal(deal.id, briefing);
+            await markProcessed(drive, `hs_poll_${deal.id}`);
             console.log('HUBSPOT_DEAL_POLL SUCESSO', deal.id);
           } catch (err) {
             // Não quebra o lote inteiro por causa de um deal problemático —
-            // esse deal continua sem super_briefing e será tentado de novo
-            // no próximo ciclo do cron.
+            // como não chamamos markProcessed em caso de erro, esse deal
+            // continua elegível e será tentado de novo no próximo ciclo.
             console.error('HUBSPOT_DEAL_POLL erro no deal', deal.id, err.message);
           }
         }
