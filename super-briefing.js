@@ -279,11 +279,21 @@ function registrarRotaSuperBriefing(app, getDriveClient, claimCall, markProcesse
 
     (async () => {
       try {
-        // Ajustar o nome do campo conforme o payload configurado no
-        // "Enviar um webhook" do Workflow do HubSpot
-        const dealId = req.body?.objectId || req.body?.dealId;
+        // Igual ao resto do server.js: por causa do express.text({type:'*/*'})
+        // no topo do arquivo, req.body SEMPRE chega como string, nunca como
+        // objeto já parseado — precisa fazer o JSON.parse manual aqui também.
+        const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+        let payload;
+        try {
+          payload = JSON.parse(rawBody);
+        } catch (e) {
+          console.log('HUBSPOT_DEAL: payload não é JSON válido', rawBody);
+          return;
+        }
+
+        const dealId = payload?.objectId || payload?.dealId;
         if (!dealId) {
-          console.log('HUBSPOT_DEAL: payload sem dealId', req.body);
+          console.log('HUBSPOT_DEAL: payload sem dealId', payload);
           return;
         }
 
