@@ -545,7 +545,7 @@ function registrarRotaSuperBriefing(app, getDriveClient, claimCall, markProcesse
 // manual como no fluxo por webhook.
 // ----------------------------------------------------------------------------
 function registrarRotaPolling(app) {
-  app.post('/cron/verificar-deals-novos', (req, res) => {
+  const handler = (req, res) => {
     res.json({ ok: true, status: 'processing' });
 
     (async () => {
@@ -586,7 +586,13 @@ function registrarRotaPolling(app) {
         console.error('HUBSPOT_DEAL_POLL Background error', err);
       }
     })();
-  });
+  };
+
+  // GET e POST no mesmo handler — GET permite disparar isso de graça via
+  // UptimeRobot (que só manda GET no plano free), sem precisar do Cron Job
+  // pago do Render (US$1/mês, sem tier gratuito).
+  app.get('/cron/verificar-deals-novos', handler);
+  app.post('/cron/verificar-deals-novos', handler);
 }
 
 module.exports = { registrarRotaSuperBriefing, registrarRotaPolling };
