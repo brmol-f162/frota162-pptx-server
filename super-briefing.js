@@ -536,4 +536,57 @@ function registrarRotaSuperBriefing(app, getDriveClient, claimCall, markProcesse
   });
 }
 
-module.exports = { registrarRotaSuperBriefing };
+// ----------------------------------------------------------------------------
+// 6.5. Polling — alternativa ao Workflow do HubSpot (que exige Operations Hub
+// Pro/Ent pra ação de webhook, fora do plano da Frota162). Roda via Render
+// Cron Job, mesmo padrão do /cron/checklist-diario. Critério de "já
+// processei" é o próprio campo super_briefing estar vazio — se uma tentativa
+// falhar, o próximo ciclo tenta de novo sozinho, sem precisar de marcador
+// manual como no fluxo por webhook.
+// ----------------------------------------------------------------------------
+function registrarRotaPolling(app) {
+  app.post('/cron/verificar-deals-novos', (req, res) => {
+    res.json({ ok: true, status: 'processing' });
+
+    (async () => {
+      try {
+        const etapaId = process.env.HUBSPOT_ETAPA_REUNIAO_AGENDADA_ID;
+        if (!etapaId) {
+          console.error('HUBSPOT_DEAL_POLL: variável HUBSPOT_ETAPA_REUNIAO_AGENDADA_ID não configurada');
+          return;
+        }
+
+        const filters = [
+          { propertyName: 'dealstage', operator: 'EQ', value: etapaId },
+          { propertyName: PROPERTY_SUPER_BRIEFING, operator: 'NOT_HAS_PROPERTY' },
+        ];
+        const deals = await hubspotSearchDeals(filters, ['dealname'], 20);
+
+        if (deals.length === 0) {
+          console.log('HUBSPOT_DEAL_POLL: nenhum deal novo pendente');
+          return;
+        }
+        console.log(`HUBSPOT_DEAL_POLL: ${deals.length} deal(s) pendente(s) —`, deals.map(d => d.id).join(', '));
+
+        for (const deal of deals) {
+          try {
+            const dealData = await buscarDealCompleto(deal.id);
+            const fonteEmpresa = resolverFonteEmpresa(dealData.props, dealData.emailContato);
+            const briefing = await chamarClaudeSuperBriefing(dealData, fonteEmpresa);
+            await salvarBriefingNoDeal(deal.id, briefing);
+            console.log('HUBSPOT_DEAL_POLL SUCESSO', deal.id);
+          } catch (err) {
+            // Não quebra o lote inteiro por causa de um deal problemático —
+            // esse deal continua sem super_briefing e será tentado de novo
+            // no próximo ciclo do cron.
+            console.error('HUBSPOT_DEAL_POLL erro no deal', deal.id, err.message);
+          }
+        }
+      } catch (err) {
+        console.error('HUBSPOT_DEAL_POLL Background error', err);
+      }
+    })();
+  });
+}
+
+module.exports = { registrarRotaSuperBriefing, registrarRotaPolling };
