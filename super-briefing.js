@@ -116,7 +116,8 @@ async function buscarDealCompleto(dealId) {
 
 // ----------------------------------------------------------------------------
 // 2. Resolver a fonte de empresa: site > Instagram > domínio do e-mail
-//    corporativo > nada (registra a ausência, não inventa)
+//    corporativo > nada (o system prompt trata a ausência silenciosamente,
+//    sem explicar o motivo — só não inventa)
 // ----------------------------------------------------------------------------
 function resolverFonteEmpresa(props, emailContato) {
   if (props.site_da_empresa) return { tipo: 'site', valor: props.site_da_empresa };
@@ -156,8 +157,10 @@ REGRAS INEGOCIÁVEIS:
 - Toda notícia ou dado de mercado vem com o link da fonte ao lado, entre
   parênteses. Nenhuma afirmação de mercado sem link.
 - Se não achar site, Instagram, domínio corporativo ou notícia relevante,
-  escreva explicitamente "Não foi possível localizar [X]". Nunca preencha
-  com suposição genérica ou dado inventado.
+  simplesmente OMITA esse ponto — não escreva nada explicando que não achou.
+  A ausência de uma seção ou bullet já fala por si. Nunca preencha com
+  suposição genérica, dado inventado, ou frase tipo "não foi possível
+  localizar" — isso só ocupa espaço sem ajudar o Executivo.
 - Máximo de ${MAX_BUSCAS} buscas na web por briefing. Se já existe uma URL de
   site/Instagram/domínio de e-mail no contexto, use fetch direto nela em vez
   de gastar busca com isso.
@@ -211,7 +214,7 @@ async function chamarClaudeSuperBriefing(dealData, fonteEmpresa) {
 
   const contextoEmpresa = fonteEmpresa.tipo !== 'nenhuma'
     ? `Fonte de empresa disponível (${fonteEmpresa.tipo}): ${fonteEmpresa.valor}. Use web_fetch nisso ANTES de gastar busca.`
-    : 'Nenhum site, Instagram ou domínio de e-mail corporativo disponível para esta empresa — registre isso na Nota.';
+    : 'Nenhum site, Instagram ou domínio de e-mail corporativo disponível para esta empresa — não gaste espaço mencionando essa ausência, apenas siga com o que houver de outras fontes.';
 
   const userMsg = `
 DEAL: ${props.dealname || '(sem nome)'}
