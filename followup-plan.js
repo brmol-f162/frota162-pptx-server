@@ -61,8 +61,8 @@ const SLACK_FOLLOWUP_WEBHOOKS = {
   'thais':          process.env.SLACK_FOLLOWUP_WEBHOOK_THAIS,
   'william':        process.env.SLACK_FOLLOWUP_WEBHOOK_WILLIAM,
   'willîam':        process.env.SLACK_FOLLOWUP_WEBHOOK_WILLIAM,
-  'bruno pereira':  process.env.SLACK_FOLLOWUP_WEBHOOK_BRUNOP,
-  'bruno.pereira':  process.env.SLACK_FOLLOWUP_WEBHOOK_BRUNOP,
+  'bruno pereira':  process.env.SLACK_FOLLOWUP_WEBHOOK_BRUNO,
+  'bruno.pereira':  process.env.SLACK_FOLLOWUP_WEBHOOK_BRUNO,
 };
 function getFollowupWebhook(nomeOuEmail) {
   if (!nomeOuEmail) return null;
@@ -75,12 +75,11 @@ function getFollowupWebhook(nomeOuEmail) {
 
 // ─── Busca o Deal no HubSpot pelo nome da empresa (casamento por token) ──
 // Nunca lança erro — qualquer falha resolve null e a régua segue só com a
-// transcrição. Assume HUBSPOT_SERVICE_TOKEN = mesma Chave de Serviço usada
-// no super-briefing.js (escopo crm.objects.deals.read). CONFIRMAR o nome
-// exato da env var ao integrar, caso o super-briefing.js use outro nome.
+// transcrição. Usa HUBSPOT_TOKEN — mesma env var e mesma Chave de Serviço
+// já usada pelo super-briefing.js (escopo crm.objects.deals.read).
 function buscarDealHubSpot(nomeEmpresa) {
   return new Promise((resolve) => {
-    if (!process.env.HUBSPOT_SERVICE_TOKEN || !nomeEmpresa) { resolve(null); return; }
+    if (!process.env.HUBSPOT_TOKEN || !nomeEmpresa) { resolve(null); return; }
     const body = JSON.stringify({
       filterGroups: [{
         filters: [
@@ -97,7 +96,7 @@ function buscarDealHubSpot(nomeEmpresa) {
     const req = https.request({
       hostname: 'api.hubapi.com', path: '/crm/v3/objects/deals/search', method: 'POST',
       headers: {
-        'authorization': `Bearer ${process.env.HUBSPOT_SERVICE_TOKEN}`,
+        'authorization': `Bearer ${process.env.HUBSPOT_TOKEN}`,
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(body),
       },
@@ -107,7 +106,15 @@ function buscarDealHubSpot(nomeEmpresa) {
       res.on('end', () => {
         try {
           const p = JSON.parse(data);
-          resolve((p.results && p.results[0] && p.results[0].properties) || null);
+          if (!p.results) {
+            // Resposta sem "results" geralmente é erro da API (token errado,
+            // property inexistente, etc.) — loga pra não mascarar um problema
+            // de configuração como "deal não encontrado".
+            console.log('[Followup] Resposta inesperada do HubSpot (sem "results"):', JSON.stringify(p).slice(0, 300));
+            resolve(null);
+            return;
+          }
+          resolve((p.results[0] && p.results[0].properties) || null);
         } catch (e) {
           console.log('[Followup] Falha ao parsear resposta HubSpot (não bloqueante):', e.message);
           resolve(null);
@@ -180,6 +187,11 @@ ${transcricao}`;
     const body = JSON.stringify({
       model: 'claude-sonnet-4-5',
       max_tokens: 3000,
+      // Mesmo fix documentado no super-briefing.js: com tools habilitadas, o
+      // modo de thinking adaptativo pode consumir o max_tokens antes de
+      // chegar no texto final (stop_reason 'max_tokens' sem resposta
+      // nenhuma). Desabilitar evita reproduzir o mesmo bug aqui.
+      thinking: { type: 'disabled' },
       system: SYSTEM_FOLLOWUP,
       messages: [{ role: 'user', content: conteudo }],
       ...(tools ? { tools } : {}),
@@ -202,13 +214,27 @@ ${transcricao}`;
             reject(new Error('Claude API error (followup): ' + (p.error?.message || p.error?.type || JSON.stringify(p).slice(0, 200))));
             return;
           }
-          // Com web_search habilitado, a resposta pode ter blocos de
-          // tool_use/tool_result intercalados — o JSON final é sempre o
-          // ÚLTIMO bloco de texto retornado.
-          const blocosTexto = p.content.filter(b => b.type === 'text');
-          const ultimoTexto = blocosTexto[blocosTexto.length - 1];
-          if (!ultimoTexto) { reject(new Error('Resposta da Claude sem bloco de texto final (followup)')); return; }
-          const t = ultimoTexto.text.replace(/```json/gi, '').replace(/```/g, '').trim();
+          // Mesmo fix do super-briefing.js: com tools habilitadas, o modelo
+          // escreve texto normalmente ENTRE usos de ferramenta (não é
+          // desobediência ao prompt) — pegar só "o último bloco de texto"
+          // pode cortar a resposta final se ela vier em mais de um bloco
+          // consecutivo. Pega a SEQUÊNCIA de blocos de texto do final (depois
+          // do último tool_use/tool_result), juntando todos eles em ordem.
+          let textoFinal = [];
+          for (let i = p.content.length - 1; i >= 0; i--) {
+            if (p.content[i].type === 'text') textoFinal.unshift(p.content[i].text);
+            else break;
+          }
+          const ultimoTexto = textoFinal.join('\n').trim();
+          if (!ultimoTexto) {
+            console.error(
+              '[Followup] Resposta da Claude sem texto final. stop_reason:', p.stop_reason,
+              '| tipos de bloco recebidos:', (p.content || []).map(b => b.type).join(', ') || '(nenhum)'
+            );
+            reject(new Error(`Resposta da Claude sem bloco de texto final (followup, stop_reason: ${p.stop_reason})`));
+            return;
+          }
+          const t = ultimoTexto.replace(/```json/gi, '').replace(/```/g, '').trim();
           resolve(JSON.parse(t));
         } catch (e) {
           reject(new Error('Falha ao parsear resposta da Claude (followup): ' + e.message));
