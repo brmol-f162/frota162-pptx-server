@@ -13,7 +13,7 @@ const app = express();
 app.use(express.text({ type: '*/*', limit: '50mb' }));
 app.use(express.json({ limit: '50mb' }));
 
-// ─── Controle de duplicatas — MARCADOR ATÔMICO POR CALL ──────────────
+// ─── Controle de duplicatas — MARCADOR ATÔMICO POR CALL ────────────── 
 // Em vez de um único JSON (que sofre corrida de leitura/escrita quando várias
 // calls chegam juntas), usamos UM arquivo marcador por call_id dentro de uma
 // pasta de controle. Criar/checar um arquivo com nome único é atômico e à prova
