@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { registrarRotaSuperBriefing, registrarRotaPolling } = require('./super-briefing');
+const { gerarEEnviarFollowup } = require('./followup-plan');
 
 const app = express();
 app.use(express.text({ type: '*/*', limit: '50mb' }));
@@ -1065,6 +1066,12 @@ app.post('/webhook/salesbud', (req, res) => {
       // Só marca sucesso definitivo depois do Slack confirmar entrega
       await markProcessed(drive, callId);
 
+      // ── Sugestão de Follow-up (módulo isolado, nunca bloqueia o principal) ──
+      // Roda DEPOIS do markProcessed: se falhar, a call já está marcada como
+      // processada (o slide estratégico já foi entregue) e não deve ser
+      // reprocessada — a falha aqui é só logada por gerarEEnviarFollowup.
+      await gerarEEnviarFollowup({ empresa, executivo, transcricao, dCall: d, postSlack });
+
     } catch(err) {
       console.error('[Salesbud] Background error:', err.message);
       try {
@@ -1116,4 +1123,4 @@ registrarRotaSuperBriefing(app, getDriveClient, claimCall, markProcessed);
 registrarRotaPolling(app, getDriveClient, claimCall, markProcessed);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v25 (sanitiza nome arquivo + concorrencia+contra-arg + planilha historico + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v26 (sanitiza nome arquivo + concorrencia+contra-arg + planilha historico + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
