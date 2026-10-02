@@ -643,10 +643,45 @@ function registrarRotaSuperBriefing(app, getDriveClient, claimCall, markProcesse
 // processei" é o próprio campo super_briefing estar vazio — se uma tentativa
 // falhar, o próximo ciclo tenta de novo sozinho, sem precisar de marcador
 // manual como no fluxo por webhook.
+//
+// FIX (02/out): esta rota causou um 429 real da Anthropic depois que o
+// serviço ficou suspenso por dias (free tier do Render) e um backlog de
+// deals pendentes se acumulou. O loop original processava TODOS os deals
+// pendentes (até 20) em sequência, SEM pausa entre eles — cada deal dispara
+// até 2 chamadas completas à Anthropic com web_search/web_fetch. Um backlog
+// grande processado de uma vez estourou o limite de requisições/minuto da
+// conta. Agravante: como o cron roda a cada 5 min e processar um lote grande
+// pode levar mais que isso, a próxima execução podia começar ENQUANTO a
+// anterior ainda rodava, multiplicando ainda mais as chamadas simultâneas.
+// Três correções abaixo: trava de execução concorrente, lote menor por
+// ciclo (drena o backlog aos poucos), e pausa entre cada deal.
 // ----------------------------------------------------------------------------
+
+// Trava de execução concorrente — em memória, por processo. Reseta sozinha
+// se o servidor reiniciar (não precisa de marcador no Drive para isso: o
+// pior caso de um restart no meio é só processar menos deals naquele ciclo,
+// nunca duplicar, já que claimCall por deal continua existindo como segunda
+// camada de proteção).
+let polldandoAgora = false;
+
+// Processa no máximo N deals por execução do cron — drena um backlog grande
+// ao longo de vários ciclos de 5 em 5 minutos, em vez de tentar tudo de uma
+// vez. Ajustável conforme o volume real observado nos logs.
+const LOTE_MAXIMO_POR_CICLO = 3;
+
+// Pausa entre cada deal processado dentro do mesmo ciclo — evita rajada de
+// chamadas à Anthropic mesmo dentro de um lote pequeno.
+const PAUSA_ENTRE_DEALS_MS = 8000;
+
 function registrarRotaPolling(app, getDriveClient, claimCall, markProcessed) {
   const handler = (req, res) => {
     res.json({ ok: true, status: 'processing' });
+
+    if (polldandoAgora) {
+      console.log('HUBSPOT_DEAL_POLL: ciclo anterior ainda em andamento, pulando esta execução.');
+      return;
+    }
+    polldandoAgora = true;
 
     (async () => {
       try {
@@ -660,22 +695,24 @@ function registrarRotaPolling(app, getDriveClient, claimCall, markProcessed) {
           { propertyName: 'dealstage', operator: 'EQ', value: etapaId },
           { propertyName: PROPERTY_SUPER_BRIEFING, operator: 'NOT_HAS_PROPERTY' },
         ];
-        const deals = await hubspotSearchDeals(filters, ['dealname'], 20);
+        const todosOsPendentes = await hubspotSearchDeals(filters, ['dealname'], 20);
 
-        if (deals.length === 0) {
+        if (todosOsPendentes.length === 0) {
           console.log('HUBSPOT_DEAL_POLL: nenhum deal novo pendente');
           return;
         }
-        console.log(`HUBSPOT_DEAL_POLL: ${deals.length} deal(s) pendente(s) —`, deals.map(d => d.id).join(', '));
+
+        // Processa só os N primeiros deste ciclo — o restante fica pendente
+        // (ainda sem super_briefing) e será pego nos próximos ciclos, 3 em 3,
+        // até o backlog inteiro ser drenado sem rajada.
+        const deals = todosOsPendentes.slice(0, LOTE_MAXIMO_POR_CICLO);
+        console.log(`HUBSPOT_DEAL_POLL: ${todosOsPendentes.length} deal(s) pendente(s) no total, processando ${deals.length} neste ciclo —`, deals.map(d => d.id).join(', '));
 
         const drive = getDriveClient();
 
-        for (const deal of deals) {
+        for (let i = 0; i < deals.length; i++) {
+          const deal = deals[i];
           try {
-            // Trava atômica — evita processar o mesmo deal duas vezes quando
-            // dois ciclos do polling caem muito próximos (ex: dois monitores
-            // de uptime, ou um ciclo que ainda não terminou de gravar quando
-            // o próximo já rodou).
             const devoProcessar = await claimCall(drive, `hs_poll_${deal.id}`);
             if (!devoProcessar) {
               console.log('HUBSPOT_DEAL_POLL já sendo processado por outro ciclo, pulando', deal.id);
@@ -694,9 +731,18 @@ function registrarRotaPolling(app, getDriveClient, claimCall, markProcessed) {
             // continua elegível e será tentado de novo no próximo ciclo.
             console.error('HUBSPOT_DEAL_POLL erro no deal', deal.id, err.message);
           }
+
+          // Pausa entre deals — mesmo dentro de um lote pequeno, nunca
+          // dispara a próxima chamada à Anthropic imediatamente após a
+          // anterior. Pula a pausa depois do último deal do lote.
+          if (i < deals.length - 1) {
+            await new Promise(r => setTimeout(r, PAUSA_ENTRE_DEALS_MS));
+          }
         }
       } catch (err) {
         console.error('HUBSPOT_DEAL_POLL Background error', err);
+      } finally {
+        polldandoAgora = false;
       }
     })();
   };
