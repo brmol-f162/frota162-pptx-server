@@ -60,6 +60,7 @@ async function salvarTranscricaoDrive(drive, titulo, dataCallFormatada, executiv
 // etc.) — só loga o erro e segue. Colunas fixas, nesta ordem:
 // Data | Executivo | Empresa | Placas | Temperatura | ROI anual | Score Salesbud
 // | Concorrentes | Tags | Perfil do lead | Próximo passo | Link PPTX | Link Transcrição | Call ID
+// | MRR citado (coluna O, adicionada na v27)
 async function salvarHistoricoPlanilha(linha) {
   const spreadsheetId = process.env.SPREADSHEET_ID;
   if (!spreadsheetId) {
@@ -196,24 +197,59 @@ function getSlackId(nomeOuEmail) {
   return null;
 }
 
+// ─── Matriz de oferta por volume de placas (regra vigente desde out/2026) ───
+// 1-10   -> SOMENTE Service (o lead nem deve saber que existem planos)
+// 11-40  -> Service preferencial; Enterprise avulso permitido
+// 41-60  -> Service preferencial; Basic/Professional/Enterprise avulsos permitidos
+// 61+    -> sem Service; planos conforme necessidade
+// A decisão é feita aqui, em código, a partir de d.placas — não depende de o
+// Claude "lembrar" a regra na hora de montar o JSON.
+function bandaOferta(placas) {
+  const p = Number(placas) || 0;
+  if (p <= 0) return 'desconhecida';
+  if (p <= 10) return 'service_somente';
+  if (p <= 60) return 'service_preferencial';
+  return 'planos';
+}
+
+// Texto do MRR para o Slack: só o que foi CITADO na call. Sem valor citado,
+// diz explicitamente que não conseguiu mapear — nunca preenche com tabela/piso.
+function textoMrr(d) {
+  const v = d && d.mrr_citado ? String(d.mrr_citado).trim() : '';
+  return v ? v : 'MRR: não consegui mapear (valor não citado na call)';
+}
+
 const SYSTEM = `Você é especialista em vendas B2B da Frota162. Analise a transcrição e retorne SOMENTE JSON válido sem markdown sem backticks.
 
-TABELA DE PREÇOS (planos: Enterprise 1, Enterprise 2, Enterprise 3 — NUNCA outro nome): Até 40 placas mínimo E1 R$397 E2 R$549 E3 R$649. 41-99 E1 R$9,48 E2 R$14,23 E3 R$16,60. 100-199 E1 R$9,00 E2 R$13,51 E3 R$15,77. 200-299 E1 R$7,65 E2 R$11,49 E3 R$13,41. 300-399 E1 R$7,27 E2 R$10,91 E3 R$12,74. 400-499 E1 R$6,91 E2 R$10,37 E3 R$12,10. 500-999 E1 R$6,56 E2 R$9,85 E3 R$11,49. 1000-1999 E1 R$5,90 E2 R$8,86 E3 R$10,34. CNPJ adicional R$150/mês. Enterprise 1=multas+SNE+1CNPJ. Enterprise 2=E1+IPVA+indicação+3CNPJs. Enterprise 3=E2+CNH+tox+5CNPJs.
+FIDELIDADE AOS DADOS DA CALL (regra mais importante, vale acima de qualquer outra): placas e valores vêm EXCLUSIVAMENTE do que foi dito na transcrição.
+(1) Volume de placas: use o número dito pelo cliente ou confirmado na call. Se não houver número claro, placas=0. NUNCA estimar, arredondar ou assumir.
+(2) Valores mensais (MRR): use somente o que o executivo CITOU na call. Se citou mais de um (ex.: plataforma e Service), registre todos em mrr_citado, dizendo a qual oferta cada um se refere. Só é permitida aritmética direta sobre números citados (ex.: placas x valor por placa citado). Se nenhum valor foi citado, mrr_citado="" e z3_investimento="A confirmar" — NUNCA preencher com valor de tabela, de exemplo ou de memória.
+(3) R$649 é o piso mensal do plano Enterprise até 40 placas. NÃO é o valor do Service, nem de qualquer plano acima de 40 placas, e só pode aparecer se o executivo o citou.
+(4) Se estiver em dúvida entre dois números, use o dito com mais clareza; se continuar duvidoso, deixe como não mapeado (placas=0 ou mrr_citado vazio). Não mapear é melhor que mapear errado.
 
-REGRA CRÍTICA ≤40 PLACAS (vigente desde treinamento Service): para clientes com até 40 placas, NUNCA oferecer Enterprise 1 ou Enterprise 2. Existem SOMENTE duas opções: (a) Enterprise 3 sozinho R$649/mês — cliente opera a plataforma; (b) Enterprise 3 + Service R$932/mês — a Frota162 opera tudo para o cliente (indicação de condutor, pagamento, gestão documental completa). z3_stat SEMPRE "Enterprise 3" para placas<=40, nunca E1/E2.
+PLANOS (nomes atuais): Basic (antigo Enterprise 1) = notificações + multas + SNE + 1 CNPJ NTT. Professional (antigo Enterprise 2) = Basic + IPVA/licenciamento + indicação de condutor + 3 CNPJs. Enterprise (antigo Enterprise 3) = Professional + consulta de CNH + toxicológico + 5 CNPJs. Se a transcrição usar os nomes antigos, converta para os atuais. Recomendação por necessidade (para planos avulsos acima de 40 placas): consulta de CNH = sim -> Enterprise; indicação de condutor e/ou IPVA/licenciamento = sim (sem CNH) -> Professional; nenhum dos três -> Basic. Preços por placa NÃO ficam neste prompt: use apenas os citados na call.
 
-SERVICE — quando incluir: se placas<=40 E a call sinalizar qualquer interesse do cliente em não operar a plataforma, em terceirizar, ou em receber as duas propostas (software e software+service), defina tem_interesse_service=true. Posicionamento correto do Service (do treinamento oficial): NÃO é terceirizar para despachante — é BPO documental, a Frota162 assume o processo com especialistas dedicados. Nunca revelar limites internos de quantidade ao cliente (ex: "144 indicações/ano") — dizer apenas "está incluso". Sempre mencionar SNE (desconto por adesão) como pilar central do Service. Benefícios reais a explorar: zero novas contratações, zero curva de aprendizado da equipe do cliente, redução de risco (prazo/indicação/CNH não dependem mais da memória do cliente), tempo da equipe liberado para a operação.
+MATRIZ DE OFERTA POR VOLUME DE PLACAS (regra dura, vigente desde out/2026):
+- 1 a 10 placas: SOMENTE Service. O lead nem deve saber que existem planos: o material NÃO menciona Basic, Professional, Enterprise, a palavra "plano", a opção de operar a plataforma sozinho nem valor de plataforma avulsa. Oferta única: "Service Frota162" com UM valor mensal total em z3_investimento (mesmo que o executivo tenha citado plataforma e adicional em separado, exiba só o total). Deixe vazios service_sem_titulo, service_sem_itens, z3_alt_label, z3_alt_investimento e z3_alt_tagline. service_header_sub e service_com_titulo não citam plano.
+- 11 a 40 placas: preferencialmente Service; o plano Enterprise avulso pode ser vendido (único plano permitido nesta faixa — nunca Basic ou Professional).
+- 41 a 60 placas: preferencialmente Service; Basic, Professional e Enterprise avulsos podem ser vendidos.
+- Acima de 60 placas: sem Service. Deixe vazios todos os campos service_* e z3_alt_*; z3_stat é o plano recomendado.
+Para 11 a 60 placas: z3_stat="Service Frota162" e z3_investimento = valor total do Service citado na call; a opção avulsa vai na linha secundária: z3_alt_label="Ou só a plataforma - você opera (NomeDoPlano)" e z3_alt_investimento = valor avulso citado (ou "A confirmar" se não foi citado). z3_alt_tagline SÓ se os DOIS valores foram citados: "Menos gente, tempo e risco - por só R$X a mais", com X = valor do Service menos o da plataforma.
+Se o executivo ofereceu na call algo FORA desta matriz (ex.: plano avulso para até 10 placas; Basic ou Professional para até 40; Service acima de 60), o material segue a matriz e alerta_regra_placas descreve o desvio em uma frase curta (vazio se não houve desvio).
 
-ROI: economia_multas=multas_mes x valor x 0.4(SNE) ou 0.2. economia_NIC=NIC_tratadas x valor x 0.6. economia_pessoas=(func-1) x 2500. ROI_anual=economia_total_anual - investimento_anual. custo_mensal_base=multas_mes x 130 se sem ROI. payback = investimento_mensal / (ROI_anual / 12). SOMENTE calcular dias_payback quando tem_roi=true e ROI_anual > 0. Se tem_roi=false, definir dias_payback=0.
+SERVICE — posicionamento (do treinamento oficial): NÃO é terceirizar para despachante — é BPO documental, a Frota162 assume o processo com especialistas dedicados. Nunca revelar limites internos de quantidade ao cliente (ex: "144 indicações/ano") — dizer apenas "está incluso". Sempre mencionar SNE (desconto por adesão) como pilar central do Service. Benefícios reais a explorar: zero novas contratações, zero curva de aprendizado da equipe do cliente, redução de risco (prazo/indicação/CNH não dependem mais da memória do cliente), tempo da equipe liberado para a operação. Os campos service_* ficam SEM valores em R$ (a revelação numérica fica no slide de solução). Preencha os campos service_* para 1 a 60 placas.
+
+ROI: economia_multas=multas_mes x valor x 0.4(SNE) ou 0.2. economia_NIC=NIC_tratadas x valor x 0.6. economia_pessoas=(func-1) x 2500. ROI_anual=economia_total_anual - investimento_anual. payback = investimento_mensal / (ROI_anual / 12). investimento_mensal_num = valor mensal da oferta principal CITADO na call (0 se não citado). SOMENTE calcular dias_payback quando tem_roi=true e ROI_anual > 0; senão dias_payback=0.
+tem_roi e custo_mensal: SÓ preencher quando o volume de multas por mês foi informado ou confirmado na call (valor da multa: o citado, ou R$130 como mínimo quando não citado). Caso contrário tem_roi=false, custo_mensal=0, roi_anual=0, dias_payback=0 — nesse caso o slide "custo de esperar" NÃO é gerado. NUNCA fabricar números de ROI/economia que a call não confirmou.
 
 LINGUAGEM: material apresentado pelo executivo Frota162 à diretoria do cliente. Use linguagem voltada ao cliente: "sua frota", "seu time", "sua operação". NÃO linguagem interna da Frota162.
 
-REGRAS: valor mínimo multa R$130. sinal menos SÓ nas barras do custo de esperar. tem_roi=false se call não confirmou. títulos máx 40 chars. z3_stat deve ser Enterprise 1, Enterprise 2 ou Enterprise 3 (ou Enterprise 3 obrigatório se placas<=40) — NUNCA nome inventado como "Plano Intermediário". headers provocativos e específicos para ESTE cliente. NUNCA usar emojis em nenhum campo. z1_stat1 e z1_stat2 devem ser curtos max 12 chars ex: 'R$90k' '30%' '5.000+' nunca frases longas. NUNCA fabricar números de ROI/economia que a call não confirmou — se Gabriel não revelou gasto, tem_roi=false e os campos de custo usam linguagem qualitativa, nunca valor inventado.
+REGRAS: valor mínimo de multa R$130 (dizer "mínimo", nunca "médio"). sinal menos SÓ nas barras do custo de esperar. títulos máx 40 chars. z3_stat é "Service Frota162" (1 a 60 placas), ou o plano recomendado (Basic, Professional ou Enterprise) acima de 60 placas, ou "ROI anual R$X" quando tem_roi=true — NUNCA nome inventado como "Plano Intermediário". Em s2_header_bold, s2_header_normal, z3_sub1 e z3_badge para 1 a 10 placas: nenhuma menção a plano. headers provocativos e específicos para ESTE cliente. NUNCA usar emojis em nenhum campo. z1_stat1 e z1_stat2 devem ser curtos max 12 chars ex: 'R$90k' '30%' '5.000+' nunca frases longas.
 
 TEMPERATURA: quente=lead engajado perguntas próximos passos decisor envolvido. morno=interesse sem comprometimento claro. frio=pouco engajamento objeções sem próximo passo.
 
-JSON (todos obrigatórios; campos service_* só relevantes quando tem_interesse_service=true e placas<=40):
-{"empresa":"","perfil_lead":"decisor ou influenciador","placas":0,"cnpjs":0,"segmento":"","tem_roi":true,"tem_interesse_service":false,"temperatura":"quente ou morno ou frio","roi_anual":0,"s1_header_bold":"[Nome do decisor se identificado],\\nvocês têm X placas [situação específica]. Formato: Nome,\\nvocês têm 22 placas rodando SP sem visibilidade. Se sem nome: frase provocativa com dado real max 70 chars","s1_header_sub":"X placas · Y CNPJs · Região","s1_subtitulo":"contexto segmento voltado ao cliente","cards":[{"stat":"","titulo":"max 40 chars","desc":"2-3 linhas específicas voltadas ao cliente"},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""}],"s1_footer_bold":"urgência específica com número real max 80 chars","s1_footer_normal":"complemento","service_header_bold":"frase conceitual SEM valores em R$, ex: 'A Frota162 também pode operar tudo isso para você.'","service_header_sub":"Enterprise 3 + Service - disponível para frotas até 40 placas","service_sem_titulo":"SEM SERVICE - você opera","service_sem_itens":["item 1 sem service","item 2","item 3","item 4"],"service_com_titulo":"COM SERVICE - a Frota162 opera","service_com_itens":["item 1 com service orientado a resultado","item 2","item 3","item 4"],"service_beneficios":[{"stat":"0","titulo":"Novas contratações","desc":"curto"},{"stat":"Menos","titulo":"Tempo da equipe","desc":"curto"},{"stat":"100%","titulo":"Do risco sai da mão","desc":"curto"}],"service_nota":"reforço qualitativo sem valores em R$","s2_header_bold":"Da dor de -R$X ao retorno de +R$Y por ano. OU X placas sem visibilidade a recomendacao é o Enterprise 3.","s2_header_normal":"Como a Frota162 resolve, em 3 passos — [Empresa]","z1_stat1":"","z1_sub1":"1 linha","z1_stat2":"","z1_sub2":"1 linha","z1_bullets":["dado específico 1","dado específico 2"],"passos":[{"titulo":"max 35 chars voltado ao cliente","desc":"1 linha no contexto do cliente"},{"titulo":"","desc":""},{"titulo":"","desc":""},{"titulo":"","desc":""}],"z3_stat":"ROI anual R$X OU Enterprise 1 OU Enterprise 2 OU Enterprise 3","z3_sub1":"retorno por ano ou features do plano","z3_investimento":"R$X,XX/mês","z3_badge":"diferencial específico para este cliente","z3_service_label":"Com Service - a Frota162 opera por você (só se tem_interesse_service)","z3_service_investimento":"R$X,XX/mês (só se tem_interesse_service)","z3_service_tagline":"Menos gente, tempo e risco - por só R$X a mais (só se tem_interesse_service, X = diferença real E3+Service menos E3)","z3_nota":"condições comerciais e limitações reais","s2_cta_bold":"próximo passo combinado na call","s2_cta_normal":"ação concreta","custo_mensal":0,"investimento_mensal_num":0,"dias_payback":0,"s3_header_bold":"Cada mês sem a Frota162 é R$X saindo do caixa da [Empresa].","s3_header_sub":"base confirmada na call","s3_formula":"fórmula usada","s3_nota":"metodologia e limitações","slack_resumo":"2 linhas objetivas SEM EMOJIS: dor principal + alerta crucial","proximo_passo":"ação concreta para o executivo","concorrencia_detalhe":"SÓ preencher se a transcrição menciona concorrente(s): para cada um, nome + sentimento (elogiou/neutro/criticou) + o que foi dito, curto e direto. Ex: 'LW: cliente elogiou o preço mas criticou o suporte lento.' Se vários concorrentes, separar por ; . Deixar vazio se nenhum foi mencionado.","concorrencia_contra_argumento":"SÓ preencher se o cliente ELOGIOU algum concorrente (é uma objeção real a contornar - se foi neutro ou criticou, deixar vazio). Sugira uma resposta prática e curta para o executivo usar na próxima call, baseada SOMENTE nos diferenciais reais e verificáveis da Frota162 (SNE com desconto, Enterprise 3 completo, Service/BPO documental para operar tudo pelo cliente, especialista dedicado, tabela de preços transparente sem surpresa). NUNCA inventar ou afirmar informação negativa não confirmada sobre o concorrente específico - o foco é reforçar o valor da Frota162, não atacar o concorrente."}`;
+JSON (todos obrigatórios; campos service_* e z3_alt_* só quando a matriz permitir):
+{"empresa":"","perfil_lead":"decisor ou influenciador","placas":0,"cnpjs":0,"segmento":"","tem_roi":false,"mrr_citado":"valores mensais CITADOS na call com a oferta de cada um, ex: 'R$815,00/mês (Service) | R$649,00/mês (plataforma avulsa)'; vazio se nenhum valor foi citado","alerta_regra_placas":"desvio da matriz de placas em 1 frase, ou vazio","temperatura":"quente ou morno ou frio","roi_anual":0,"s1_header_bold":"[Nome do decisor se identificado],\\nvocês têm X placas [situação específica]. Formato: Nome,\\nvocês têm 22 placas rodando SP sem visibilidade. Se sem nome: frase provocativa com dado real max 70 chars","s1_header_sub":"X placas · Y CNPJs · Região","s1_subtitulo":"contexto segmento voltado ao cliente","cards":[{"stat":"","titulo":"max 40 chars","desc":"2-3 linhas específicas voltadas ao cliente"},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""}],"s1_footer_bold":"urgência específica com número real max 80 chars","s1_footer_normal":"complemento","service_header_bold":"frase conceitual SEM valores em R$, ex: 'A Frota162 também pode operar tudo isso para você.'","service_header_sub":"1 a 10 placas: sem citar plano (ex: 'Operação completa pela Frota162'); 11 a 60: pode citar 'Enterprise + Service'","service_sem_titulo":"SEM SERVICE - você opera (vazio para 1 a 10 placas)","service_sem_itens":["item 1 sem service","item 2","item 3","item 4"],"service_com_titulo":"COM SERVICE - a Frota162 opera (para 1 a 10 placas: 'O QUE A FROTA162 OPERA POR VOCE')","service_com_itens":["item 1 com service orientado a resultado","item 2","item 3","item 4"],"service_beneficios":[{"stat":"0","titulo":"Novas contratações","desc":"curto"},{"stat":"Menos","titulo":"Tempo da equipe","desc":"curto"},{"stat":"100%","titulo":"Do risco sai da mão","desc":"curto"}],"service_nota":"reforço qualitativo sem valores em R$","s2_header_bold":"Da dor de -R$X ao retorno de +R$Y por ano. OU X placas sem visibilidade, a recomendação é o Service Frota162 / o plano [nome].","s2_header_normal":"Como a Frota162 resolve, em 3 passos — [Empresa]","z1_stat1":"","z1_sub1":"1 linha","z1_stat2":"","z1_sub2":"1 linha","z1_bullets":["dado específico 1","dado específico 2"],"passos":[{"titulo":"max 35 chars voltado ao cliente","desc":"1 linha no contexto do cliente"},{"titulo":"","desc":""},{"titulo":"","desc":""},{"titulo":"","desc":""}],"z3_stat":"Service Frota162 OU Basic OU Professional OU Enterprise OU ROI anual R$X","z3_sub1":"retorno por ano ou o que está incluso","z3_investimento":"valor mensal CITADO na call da oferta principal, ou 'A confirmar'","z3_badge":"diferencial específico para este cliente","z3_alt_label":"só 11 a 60 placas: 'Ou só a plataforma - você opera (NomeDoPlano)'","z3_alt_investimento":"só 11 a 60 placas: valor avulso citado, ou 'A confirmar'","z3_alt_tagline":"só 11 a 60 placas e só se os dois valores foram citados: 'Menos gente, tempo e risco - por só R$X a mais'","z3_nota":"condições comerciais e limitações reais","s2_cta_bold":"próximo passo combinado na call","s2_cta_normal":"ação concreta","custo_mensal":0,"investimento_mensal_num":0,"dias_payback":0,"s3_header_bold":"Cada mês sem a Frota162 é R$X saindo do caixa da [Empresa].","s3_header_sub":"base confirmada na call","s3_formula":"fórmula usada","s3_nota":"metodologia e limitações","slack_resumo":"2 linhas objetivas SEM EMOJIS: dor principal + alerta crucial","proximo_passo":"ação concreta para o executivo","concorrencia_detalhe":"SÓ preencher se a transcrição menciona concorrente(s): para cada um, nome + sentimento (elogiou/neutro/criticou) + o que foi dito, curto e direto. Ex: 'LW: cliente elogiou o preço mas criticou o suporte lento.' Se vários concorrentes, separar por ; . Deixar vazio se nenhum foi mencionado.","concorrencia_contra_argumento":"SÓ preencher se o cliente ELOGIOU algum concorrente (é uma objeção real a contornar - se foi neutro ou criticou, deixar vazio). Sugira uma resposta prática e curta para o executivo usar na próxima call, baseada SOMENTE nos diferenciais reais e verificáveis da Frota162 (SNE com desconto, plano completo, Service/BPO documental para operar tudo pelo cliente, especialista dedicado, tabela de preços transparente sem surpresa). NUNCA inventar ou afirmar informação negativa não confirmada sobre o concorrente específico - o foco é reforçar o valor da Frota162, não atacar o concorrente."}`;
 
 function callClaude(text) {
   return new Promise((resolve, reject) => {
@@ -325,6 +361,11 @@ function gerarPPTX(d, outPath) {
   const pres = new PptxGenJS();
   pres.layout = 'LAYOUT_16x9'; // 10 x 5.625"
 
+  // Banda de oferta decidida em código pelo volume de placas (ver bandaOferta)
+  const banda = bandaOferta(d.placas);
+  const temSlideService = (banda === 'service_somente' || banda === 'service_preferencial')
+    && Array.isArray(d.service_com_itens) && d.service_com_itens.length > 0;
+
   // ── SLIDE 1 — A dor em linguagem executiva ────────────────────────────
   const s1 = pres.addSlide();
   s1.background = { color: 'F7F6F4' };
@@ -363,9 +404,12 @@ function gerarPPTX(d, outPath) {
   ],{x:0.22,y:5.20,w:7.80,h:0.38,fontFace:'Montserrat',fontSize:9,valign:'middle',margin:0});
   s1.addText('frota162.com.br',{x:8.20,y:5.24,w:1.65,h:0.28,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
 
-  // ── SLIDE 2 — SERVICE: SEM x COM (conceitual, sem valores em R$) ────────
-  // Só é gerado quando placas <= 40 E há sinal de interesse no Service
-  if (d.tem_interesse_service && (d.placas||999) <= 40) {
+  // ── SLIDE 2 — SERVICE (conceitual, sem valores em R$) ───────────────────
+  // Gerado para 1 a 60 placas (matriz de oferta). 1 a 10 placas: coluna única,
+  // SEM o contraponto "sem service / você opera" — o lead nem deve saber que
+  // existe a opção de operar a plataforma sozinho. 11 a 60: SEM x COM.
+  if (temSlideService) {
+    const soService = (banda === 'service_somente');
     const s1s = pres.addSlide();
     s1s.background = { color: 'F7F6F4' };
     s1s.addShape(pres.ShapeType.rect,{x:0,y:0,w:10,h:0.92,fill:{color:COR.laranja}});
@@ -375,24 +419,29 @@ function gerarPPTX(d, outPath) {
     const SCY = 0.98, SCH = 2.75;
     const SC1X=0.30, SCW=4.55, SC2X=5.15;
 
-    // Coluna SEM SERVICE (neutro, sem borda)
-    s1s.addShape(pres.ShapeType.rect,{x:SC1X,y:SCY,w:SCW,h:SCH,fill:{color:'F0EFED'}});
-    s1s.addShape(pres.ShapeType.rect,{x:SC1X,y:SCY,w:SCW,h:0.42,fill:{color:'DDDBD8'}});
-    s1s.addText(d.service_sem_titulo||'SEM SERVICE',{x:SC1X+0.16,y:SCY,w:SCW-0.32,h:0.42,fontFace:'Montserrat',fontSize:10,bold:true,color:COR.dark,valign:'middle',margin:0});
-    (d.service_sem_itens||[]).forEach((item,i)=>{
-      const iy = SCY+0.52+i*0.55;
-      s1s.addShape(pres.ShapeType.ellipse,{x:SC1X+0.18,y:iy+0.02,w:0.16,h:0.16,fill:{color:'999999'}});
-      s1s.addText(item,{x:SC1X+0.44,y:iy-0.06,w:SCW-0.62,h:0.48,fontFace:'Montserrat',fontSize:8,color:'444444',valign:'top',margin:0,wrap:true});
-    });
+    // Coluna SEM SERVICE (neutro, sem borda) — só de 11 a 60 placas
+    if (!soService) {
+      s1s.addShape(pres.ShapeType.rect,{x:SC1X,y:SCY,w:SCW,h:SCH,fill:{color:'F0EFED'}});
+      s1s.addShape(pres.ShapeType.rect,{x:SC1X,y:SCY,w:SCW,h:0.42,fill:{color:'DDDBD8'}});
+      s1s.addText(d.service_sem_titulo||'SEM SERVICE',{x:SC1X+0.16,y:SCY,w:SCW-0.32,h:0.42,fontFace:'Montserrat',fontSize:10,bold:true,color:COR.dark,valign:'middle',margin:0});
+      (d.service_sem_itens||[]).forEach((item,i)=>{
+        const iy = SCY+0.52+i*0.55;
+        s1s.addShape(pres.ShapeType.ellipse,{x:SC1X+0.18,y:iy+0.02,w:0.16,h:0.16,fill:{color:'999999'}});
+        s1s.addText(item,{x:SC1X+0.44,y:iy-0.06,w:SCW-0.62,h:0.48,fontFace:'Montserrat',fontSize:8,color:'444444',valign:'top',margin:0,wrap:true});
+      });
+    }
 
-    // Coluna COM SERVICE (verde, sem borda)
-    s1s.addShape(pres.ShapeType.rect,{x:SC2X,y:SCY,w:SCW,h:SCH,fill:{color:'EAF6EA'}});
-    s1s.addShape(pres.ShapeType.rect,{x:SC2X,y:SCY,w:SCW,h:0.42,fill:{color:COR.verde}});
-    s1s.addText(d.service_com_titulo||'COM SERVICE',{x:SC2X+0.16,y:SCY,w:SCW-0.32,h:0.42,fontFace:'Montserrat',fontSize:10,bold:true,color:COR.branco,valign:'middle',margin:0});
+    // Coluna COM SERVICE (verde, sem borda) — largura total quando é só Service
+    const COMX = soService ? SC1X : SC2X;
+    const COMW = soService ? 9.40 : SCW;
+    const comTituloPadrao = soService ? 'O QUE A FROTA162 OPERA POR VOCÊ' : 'COM SERVICE';
+    s1s.addShape(pres.ShapeType.rect,{x:COMX,y:SCY,w:COMW,h:SCH,fill:{color:'EAF6EA'}});
+    s1s.addShape(pres.ShapeType.rect,{x:COMX,y:SCY,w:COMW,h:0.42,fill:{color:COR.verde}});
+    s1s.addText(d.service_com_titulo||comTituloPadrao,{x:COMX+0.16,y:SCY,w:COMW-0.32,h:0.42,fontFace:'Montserrat',fontSize:10,bold:true,color:COR.branco,valign:'middle',margin:0});
     (d.service_com_itens||[]).forEach((item,i)=>{
       const iy = SCY+0.52+i*0.55;
-      s1s.addShape(pres.ShapeType.ellipse,{x:SC2X+0.18,y:iy+0.02,w:0.16,h:0.16,fill:{color:COR.verde}});
-      s1s.addText(item,{x:SC2X+0.44,y:iy-0.06,w:SCW-0.62,h:0.48,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.dark,valign:'top',margin:0,wrap:true});
+      s1s.addShape(pres.ShapeType.ellipse,{x:COMX+0.18,y:iy+0.02,w:0.16,h:0.16,fill:{color:COR.verde}});
+      s1s.addText(item,{x:COMX+0.44,y:iy-0.06,w:COMW-0.62,h:0.48,fontFace:'Montserrat',fontSize:soService?9:8,bold:true,color:COR.dark,valign:'top',margin:0,wrap:true});
     });
 
     // 3 mini-cards de benefício (Tempo / Custo / Risco) - sem borda, 100% qualitativo
@@ -472,27 +521,28 @@ function gerarPPTX(d, outPath) {
 
   // ZONA 3 — RESULTADO / PLANO RECOMENDADO (verde claro)
   s2.addShape(pres.ShapeType.rect,{x:Z3X,y:CY,w:Z3W,h:CH2,fill:{color:'EAF6EA'}});
-  s2.addText(d.tem_roi?'RESULTADO':'PLANO RECOMENDADO',{x:Z3X+0.18,y:CY+0.16,w:Z3W-0.24,h:0.22,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.verde,charSpacing:1,margin:0});
+  const z3Rotulo = d.tem_roi ? 'RESULTADO' : (banda === 'planos' ? 'PLANO RECOMENDADO' : 'OFERTA RECOMENDADA');
+  s2.addText(z3Rotulo,{x:Z3X+0.18,y:CY+0.16,w:Z3W-0.24,h:0.22,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.verde,charSpacing:1,margin:0});
 
   // z3_stat — fonte adaptativa
   const z3Sz = (d.z3_stat||'').length > 8 ? 16 : 26;
   s2.addText(d.z3_stat||'',{x:Z3X+0.18,y:CY+0.40,w:Z3W-0.24,h:0.50,fontFace:'Montserrat',fontSize:z3Sz,bold:true,color:COR.verde,margin:0,wrap:true});
   s2.addText(d.z3_sub1||'',{x:Z3X+0.18,y:CY+0.92,w:Z3W-0.24,h:0.30,fontFace:'Montserrat',fontSize:8,color:'555555',margin:0,wrap:true});
   s2.addShape(pres.ShapeType.rect,{x:Z3X+0.18,y:CY+1.28,w:Z3W-0.36,h:0.016,fill:{color:'BFE3BF'}});
-  s2.addText(d.z3_investimento||'',{x:Z3X+0.18,y:CY+1.34,w:Z3W-0.24,h:0.36,fontFace:'Montserrat',fontSize:16,bold:true,color:COR.verde,margin:0,wrap:true});
+  s2.addText(d.z3_investimento||'A confirmar',{x:Z3X+0.18,y:CY+1.34,w:Z3W-0.24,h:0.36,fontFace:'Montserrat',fontSize:16,bold:true,color:COR.verde,margin:0,wrap:true});
 
   // Badge diferencial
   s2.addShape(pres.ShapeType.rect,{x:Z3X+0.18,y:CY+1.82,w:Z3W-0.36,h:0.36,fill:{color:'D4EED4'},line:{color:'BFE3BF',width:0.5}});
   s2.addText(d.z3_badge||'',{x:Z3X+0.22,y:CY+1.82,w:Z3W-0.44,h:0.36,fontFace:'Montserrat',fontSize:7.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0,wrap:true});
 
-  // Zona 3: Service (prioridade quando aplicável) OU Payback — nunca os dois, evita colisão visual
-  if (d.tem_interesse_service && (d.placas||999) <= 40 && d.z3_service_investimento) {
-    // Linha de Service - já apresentado no slide anterior, aqui só reforça a opção
+  // Zona 3: linha secundária (opção avulsa, 11 a 60 placas) OU Payback — nunca os dois, evita colisão visual.
+  // 1 a 10 placas nunca tem linha secundária (lead não pode saber que existe plano avulso).
+  if (banda === 'service_preferencial' && d.z3_alt_investimento) {
     s2.addShape(pres.ShapeType.rect,{x:Z3X+0.18,y:CY+2.32,w:Z3W-0.36,h:0.016,fill:{color:'BFE3BF'}});
-    s2.addText(d.z3_service_label||'Com Service - a Frota162 opera por você',{x:Z3X+0.18,y:CY+2.40,w:Z3W-0.24,h:0.22,fontFace:'Montserrat',fontSize:7.5,bold:true,color:'558855',margin:0,wrap:true});
-    s2.addText(d.z3_service_investimento,{x:Z3X+0.18,y:CY+2.62,w:Z3W-0.24,h:0.32,fontFace:'Montserrat',fontSize:14,bold:true,color:COR.verde,margin:0,wrap:true});
-    if (d.z3_service_tagline) {
-      s2.addText(d.z3_service_tagline,{x:Z3X+0.18,y:CY+2.96,w:Z3W-0.24,h:0.30,fontFace:'Montserrat',fontSize:7.5,bold:true,italic:true,color:COR.laranja,margin:0,wrap:true});
+    s2.addText(d.z3_alt_label||'Ou só a plataforma - você opera',{x:Z3X+0.18,y:CY+2.40,w:Z3W-0.24,h:0.22,fontFace:'Montserrat',fontSize:7.5,bold:true,color:'558855',margin:0,wrap:true});
+    s2.addText(d.z3_alt_investimento,{x:Z3X+0.18,y:CY+2.62,w:Z3W-0.24,h:0.32,fontFace:'Montserrat',fontSize:14,bold:true,color:COR.verde,margin:0,wrap:true});
+    if (d.z3_alt_tagline) {
+      s2.addText(d.z3_alt_tagline,{x:Z3X+0.18,y:CY+2.96,w:Z3W-0.24,h:0.30,fontFace:'Montserrat',fontSize:7.5,bold:true,italic:true,color:COR.laranja,margin:0,wrap:true});
     }
   } else {
     // Payback na zona 3 — SOMENTE quando tem_roi=true e ROI confirmado na call
@@ -521,66 +571,71 @@ function gerarPPTX(d, outPath) {
   s2.addText('frota162.com.br',{x:8.20,y:5.24,w:1.65,h:0.28,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
 
   // ── SLIDE 4 — O custo de esperar ──────────────────────────────────────
-  const s3 = pres.addSlide();
-  s3.background = { color: 'F7F6F4' };
+  // SÓ é gerado quando o ROI foi confirmado na call (tem_roi) E há custo mensal
+  // calculado. Sem isso o gráfico saía em branco (barras de R$0) — pior que não ter.
+  const cm = Number(d.custo_mensal) || 0;
+  const temSlideCusto = !!d.tem_roi && cm > 0;
+  if (temSlideCusto) {
+    const s3 = pres.addSlide();
+    s3.background = { color: 'F7F6F4' };
 
-  // Header laranja
-  s3.addShape(pres.ShapeType.rect,{x:0,y:0,w:10,h:1.00,fill:{color:COR.laranja}});
-  s3.addText(d.s3_header_bold||'',{x:0.38,y:0.05,w:9.3,h:0.58,fontFace:'Montserrat',fontSize:14,bold:true,color:COR.branco,valign:'middle',margin:0,wrap:true});
-  s3.addText(d.s3_header_sub||'',{x:0.38,y:0.65,w:9.3,h:0.24,fontFace:'Montserrat',fontSize:9,color:'FFD0C0',valign:'middle',margin:0});
-  s3.addText(d.s3_formula||'',{x:0.38,y:1.02,w:9.3,h:0.20,fontFace:'Montserrat',fontSize:7.5,italic:true,color:'888888',margin:0,wrap:true});
+    // Header laranja
+    s3.addShape(pres.ShapeType.rect,{x:0,y:0,w:10,h:1.00,fill:{color:COR.laranja}});
+    s3.addText(d.s3_header_bold||'',{x:0.38,y:0.05,w:9.3,h:0.58,fontFace:'Montserrat',fontSize:14,bold:true,color:COR.branco,valign:'middle',margin:0,wrap:true});
+    s3.addText(d.s3_header_sub||'',{x:0.38,y:0.65,w:9.3,h:0.24,fontFace:'Montserrat',fontSize:9,color:'FFD0C0',valign:'middle',margin:0});
+    s3.addText(d.s3_formula||'',{x:0.38,y:1.02,w:9.3,h:0.20,fontFace:'Montserrat',fontSize:7.5,italic:true,color:'888888',margin:0,wrap:true});
 
-  // 6 barras: 10, 20, 30, 45, 60, 90 dias
-  const cm = d.custo_mensal||0;
-  const DIAS=[10,20,30,45,60,90];
-  const VALS=DIAS.map(d=>cm*(d/30));
-  const BY=4.52, MH=2.90, BW=1.35, BG=0.16, X0=0.30;
+    // 6 barras: 10, 20, 30, 45, 60, 90 dias
+    const DIAS=[10,20,30,45,60,90];
+    const VALS=DIAS.map(d=>cm*(d/30));
+    const BY=4.52, MH=2.90, BW=1.35, BG=0.16, X0=0.30;
 
-  // Payback slide 3 — SOMENTE quando tem_roi=true e ROI confirmado
-  const inv2=d.investimento_mensal_num||0;
-  const roiAnualS3 = d.roi_anual||0;
-  const economiaMensalS3 = roiAnualS3 > 0 ? roiAnualS3 / 12 : 0;
-  const dpCalc = (d.tem_roi && roiAnualS3 > 0 && inv2 > 0) ? Math.round(inv2 / economiaMensalS3 * 30) : 0;
+    // Payback slide 3 — SOMENTE quando tem_roi=true e ROI confirmado
+    const inv2=d.investimento_mensal_num||0;
+    const roiAnualS3 = d.roi_anual||0;
+    const economiaMensalS3 = roiAnualS3 > 0 ? roiAnualS3 / 12 : 0;
+    const dpCalc = (d.tem_roi && roiAnualS3 > 0 && inv2 > 0) ? Math.round(inv2 / economiaMensalS3 * 30) : 0;
 
-  // Linha baseline
-  s3.addShape(pres.ShapeType.rect,{x:0.20,y:BY,w:9.60,h:0.014,fill:{color:'CCCCCC'}});
+    // Linha baseline
+    s3.addShape(pres.ShapeType.rect,{x:0.20,y:BY,w:9.60,h:0.014,fill:{color:'CCCCCC'}});
 
-  // Payback — posição fixa no topo (y=1.28), nunca sobrepõe barras
-  let paybackBi = -1;
-  if(dpCalc>0){
-    paybackBi = DIAS.findIndex(x=>x>=dpCalc); if(paybackBi<0) paybackBi=5;
-    const pbx=X0+paybackBi*(BW+BG);
-    const pbLabel = dpCalc<=45 ? `↑ Payback: ~${dpCalc} dias` : `↑ Payback: ~${Math.round(dpCalc/30)} meses`;
-    const PAYBACK_Y = 1.28;
-    s3.addShape(pres.ShapeType.rect,{x:pbx+0.06,y:PAYBACK_Y,w:BW-0.12,h:0.32,fill:{color:COR.branco},line:{color:COR.verde,width:1.5}});
-    s3.addText(pbLabel,{x:pbx+0.06,y:PAYBACK_Y,w:BW-0.12,h:0.32,fontFace:'Montserrat',fontSize:7.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0});
-    // Linha tracejada do payback até a barra
-    const bHpb=MH*(DIAS[paybackBi]/90), bToppb=BY-bHpb;
-    const lineStart = PAYBACK_Y+0.32;
-    const lineHeight = Math.max(0, bToppb - lineStart);
-    if(lineHeight>0) s3.addShape(pres.ShapeType.rect,{x:pbx+(BW/2)-0.007,y:lineStart,w:0.014,h:lineHeight,fill:{color:'BFE3BF'}});
+    // Payback — posição fixa no topo (y=1.28), nunca sobrepõe barras
+    let paybackBi = -1;
+    if(dpCalc>0){
+      paybackBi = DIAS.findIndex(x=>x>=dpCalc); if(paybackBi<0) paybackBi=5;
+      const pbx=X0+paybackBi*(BW+BG);
+      const pbLabel = dpCalc<=45 ? `↑ Payback: ~${dpCalc} dias` : `↑ Payback: ~${Math.round(dpCalc/30)} meses`;
+      const PAYBACK_Y = 1.28;
+      s3.addShape(pres.ShapeType.rect,{x:pbx+0.06,y:PAYBACK_Y,w:BW-0.12,h:0.32,fill:{color:COR.branco},line:{color:COR.verde,width:1.5}});
+      s3.addText(pbLabel,{x:pbx+0.06,y:PAYBACK_Y,w:BW-0.12,h:0.32,fontFace:'Montserrat',fontSize:7.5,bold:true,color:COR.verde,align:'center',valign:'middle',margin:0});
+      // Linha tracejada do payback até a barra
+      const bHpb=MH*(DIAS[paybackBi]/90), bToppb=BY-bHpb;
+      const lineStart = PAYBACK_Y+0.32;
+      const lineHeight = Math.max(0, bToppb - lineStart);
+      if(lineHeight>0) s3.addShape(pres.ShapeType.rect,{x:pbx+(BW/2)-0.007,y:lineStart,w:0.014,h:lineHeight,fill:{color:'BFE3BF'}});
+    }
+
+    // Barras
+    DIAS.forEach((dia,i)=>{
+      const bH=MH*(dia/90), bTop=BY-bH, bx=X0+i*(BW+BG);
+      const isPayback = (i===paybackBi);
+      s3.addShape(pres.ShapeType.rect,{x:bx,y:bTop,w:BW,h:bH,fill:{color:isPayback?'FFB3B3':'FFCDD2'},line:{color:COR.vermelho,width:0.5}});
+      s3.addText(`-R$${Math.round(VALS[i]).toLocaleString('pt-BR')}`,{x:bx,y:bTop-0.30,w:BW,h:0.26,fontFace:'Montserrat',fontSize:9.5,bold:true,color:COR.vermelho,align:'center',margin:0});
+      s3.addText(`${dia}d`,{x:bx,y:BY+0.06,w:BW,h:0.22,fontFace:'Montserrat',fontSize:8,bold:true,color:'555555',align:'center',margin:0});
+    });
+
+    // Nota — abaixo das labels
+    s3.addText(d.s3_nota||'',{x:0.30,y:4.84,w:9.40,h:0.24,fontFace:'Montserrat',fontSize:6,italic:true,color:'AAAAAA',valign:'top',margin:0,wrap:true});
+
+    // Footer dark slide 3 — FIXO no rodapé (y=5.18)
+    s3.addShape(pres.ShapeType.rect,{x:0,y:5.18,w:10,h:0.445,fill:{color:COR.dark}});
+    s3.addShape(pres.ShapeType.rect,{x:0,y:5.18,w:0.05,h:0.445,fill:{color:COR.laranja}});
+    s3.addText([
+      {text:'Decisão adiada não é decisão neutra.  ',options:{bold:true,color:COR.laranja}},
+      {text:`R$${Math.round(cm).toLocaleString('pt-BR')} por mês continuam saindo do caixa — com ou sem contrato assinado.`,options:{bold:false,color:COR.branco}}
+    ],{x:0.22,y:5.20,w:7.80,h:0.38,fontFace:'Montserrat',fontSize:8.5,valign:'middle',margin:0});
+    s3.addText('frota162.com.br',{x:8.20,y:5.24,w:1.65,h:0.28,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
   }
-
-  // Barras
-  DIAS.forEach((dia,i)=>{
-    const bH=MH*(dia/90), bTop=BY-bH, bx=X0+i*(BW+BG);
-    const isPayback = (i===paybackBi);
-    s3.addShape(pres.ShapeType.rect,{x:bx,y:bTop,w:BW,h:bH,fill:{color:isPayback?'FFB3B3':'FFCDD2'},line:{color:COR.vermelho,width:0.5}});
-    s3.addText(`-R$${Math.round(VALS[i]).toLocaleString('pt-BR')}`,{x:bx,y:bTop-0.30,w:BW,h:0.26,fontFace:'Montserrat',fontSize:9.5,bold:true,color:COR.vermelho,align:'center',margin:0});
-    s3.addText(`${dia}d`,{x:bx,y:BY+0.06,w:BW,h:0.22,fontFace:'Montserrat',fontSize:8,bold:true,color:'555555',align:'center',margin:0});
-  });
-
-  // Nota — abaixo das labels
-  s3.addText(d.s3_nota||'',{x:0.30,y:4.84,w:9.40,h:0.24,fontFace:'Montserrat',fontSize:6,italic:true,color:'AAAAAA',valign:'top',margin:0,wrap:true});
-
-  // Footer dark slide 3 — FIXO no rodapé (y=5.18)
-  s3.addShape(pres.ShapeType.rect,{x:0,y:5.18,w:10,h:0.445,fill:{color:COR.dark}});
-  s3.addShape(pres.ShapeType.rect,{x:0,y:5.18,w:0.05,h:0.445,fill:{color:COR.laranja}});
-  s3.addText([
-    {text:'Decisão adiada não é decisão neutra.  ',options:{bold:true,color:COR.laranja}},
-    {text:`R$${Math.round(cm).toLocaleString('pt-BR')} por mês continuam saindo do caixa — com ou sem contrato assinado.`,options:{bold:false,color:COR.branco}}
-  ],{x:0.22,y:5.20,w:7.80,h:0.38,fontFace:'Montserrat',fontSize:8.5,valign:'middle',margin:0});
-  s3.addText('frota162.com.br',{x:8.20,y:5.24,w:1.65,h:0.28,fontFace:'Montserrat',fontSize:8,bold:true,color:COR.laranja,align:'right',valign:'middle',margin:0});
 
   return pres.writeFile({ fileName: outPath });
 }
@@ -765,7 +820,7 @@ app.post('/generate', (req, res) => {
       const roiTexto = roiAnual > 0 ? `R$${Math.round(roiAnual).toLocaleString('pt-BR')}/ano` : 'A calcular';
 
       const dataHoraReuniao = dataCallFormatada;
-      const msg = `:car: *Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataHoraReuniao}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+      const msg = `:car: *Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataHoraReuniao}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${textoMrr(d)}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
 
       await postSlack(msg);
 
@@ -984,9 +1039,22 @@ app.post('/webhook/salesbud', (req, res) => {
       if (!d) throw lastErr;
 
       const empresaValida = d.empresa && d.empresa !== 'Empresa Não Identificada' && d.empresa !== 'Não identificado' && d.empresa !== '';
+      if (!empresaValida) {
+        console.log('[Salesbud] Descartado — empresa não identificada após análise Claude:', titulo, '| empresa:', d.empresa);
+        return;
+      }
+
+      // Volume de placas não mapeado: NÃO gera material (a faixa de oferta — só Service,
+      // Service preferencial ou planos — depende dele e um chute apresentaria plano/valor
+      // errado à diretoria do cliente). Avisa no Slack, uma vez por call.
       const placasValidas = d.placas && d.placas > 0;
-      if (!empresaValida || !placasValidas) {
-        console.log('[Salesbud] Descartado — campos insuficientes após análise Claude:', titulo, '| empresa:', d.empresa, '| placas:', d.placas);
+      if (!placasValidas) {
+        console.log('[Salesbud] Placas não mapeadas — material não gerado:', titulo);
+        const jaAvisouPlacas = await isMarked(drive, `semplacas_${callId}`);
+        if (!jaAvisouPlacas) {
+          await postSlack(`:warning: *[Salesbud] Não consegui mapear o volume de placas* — ${titulo} (${executivo}). O material não foi gerado para não apresentar plano ou valor errado. Confirme o volume com o executivo.`, process.env.SLACK_WEBHOOK_URL).catch(()=>{});
+          await markGeneric(drive, `semplacas_${callId}`);
+        }
         return;
       }
 
@@ -1030,11 +1098,14 @@ app.post('/webhook/salesbud', (req, res) => {
       const linhaConcorrenciaDetalhe = concorrentes.length > 0 && d.concorrencia_detalhe ? `\n- *Sobre a concorrência:* ${d.concorrencia_detalhe}` : '';
       const linhaContraArgumento = concorrentes.length > 0 && d.concorrencia_contra_argumento ? `\n- *Como contornar:* ${d.concorrencia_contra_argumento}` : '';
 
+      // Desvio da matriz de oferta por placas (ex.: executivo ofereceu plano avulso a lead de até 10 placas)
+      const linhaAlertaRegra = d.alerta_regra_placas && String(d.alerta_regra_placas).trim() ? `\n- *Alerta de regra:* ${String(d.alerta_regra_placas).trim()}` : '';
+
       const scoreSalesbud = payload.analytics && payload.analytics.score != null ? payload.analytics.score : null;
       const justificativaScore = payload.analytics && payload.analytics.justification ? payload.analytics.justification : '';
       const linhaScore = scoreSalesbud != null ? `\n- *Score Salesbud:* ${scoreSalesbud}/10` : '';
 
-      const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${d.z3_investimento||'A definir'}\n- *ROI estimado:* ${roiTexto}${linhaConcorrentes}${linhaConcorrenciaDetalhe}${linhaContraArgumento}${linhaScore}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+      const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${d.placas} placas · ${textoMrr(d)}${linhaAlertaRegra}\n- *ROI estimado:* ${roiTexto}${linhaConcorrentes}${linhaConcorrenciaDetalhe}${linhaContraArgumento}${linhaScore}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
 
       console.log(`[Salesbud] SUCESSO — titulo:"${titulo}" empresa:"${empresa}" placas:${d.placas} executivo:${executivo}`);
       await postSlack(msg, process.env.SLACK_WEBHOOK_URL);
@@ -1058,6 +1129,7 @@ app.post('/webhook/salesbud', (req, res) => {
           uploaded.data.webViewLink,
           linkTranscricao,
           callId,
+          d.mrr_citado && String(d.mrr_citado).trim() ? String(d.mrr_citado).trim() : 'não mapeado',
         ]);
       } catch(e) {
         console.error('[Salesbud] Falha ao gravar no histórico da planilha (não bloqueante):', e.message);
@@ -1123,4 +1195,4 @@ registrarRotaSuperBriefing(app, getDriveClient, claimCall, markProcessed);
 registrarRotaPolling(app, getDriveClient, claimCall, markProcessed);
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v26 (sanitiza nome arquivo + concorrencia+contra-arg + planilha historico + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v27 (matriz de placas + service-first + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
