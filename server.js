@@ -245,7 +245,7 @@ FIDELIDADE AOS DADOS DA CALL (vale acima de qualquer outra regra): placas e valo
 (3) R$649 é o piso mensal do plano Enterprise até 40 placas. NÃO é o valor do Service nem de plano acima de 40 placas, e só pode aparecer se o executivo o citou.
 (4) Valores que o próprio executivo disse de memória ("acho que", "pelo que me lembro") entram no material marcados como "a confirmar".
 
-TIPO DE REUNIÃO (campo tipo_reuniao): "venda_direta" (padrão: empresa com frota própria avaliando contratar a Frota162) ou "parceria" (a outra empresa quer indicar clientes, revender, integrar via API ou trocar clientes, sem contratar a plataforma para uma frota própria). Em parceria: placas=0 e o material descreve a OPORTUNIDADE DE PARCERIA, não dor de frota — s1 cards = quem é o parceiro, tamanho das bases e modelo comercial citado; passos = como a parceria funciona; z3_stat = modelo da parceria (ex.: "API + indicação"); z3_investimento = a condição comercial citada (ex.: "10% por 12 meses"), sem inventar; campos service_* e z3_alt_* vazios; tem_roi=false e custo_mensal=0. mrr_citado começa com "MRR não mapeado: reunião de parceria, sem plano cotado" e depois lista os termos comerciais citados. Em parceria não se aplicam matriz de placas, planos nem Service.
+TIPO DE REUNIÃO (campo tipo_reuniao): "venda_direta" (padrão: empresa com frota própria avaliando contratar a Frota162) ou "parceria" (a outra empresa quer indicar clientes, revender, integrar via API ou trocar clientes, sem contratar a plataforma para uma frota própria). Em parceria: placas=0 e o material descreve a OPORTUNIDADE DE PARCERIA, não dor de frota — s1 cards = quem é o parceiro, tamanho das bases e modelo comercial citado; passos = como a parceria funciona; z3_stat = modelo da parceria (ex.: "API + indicação"); z3_investimento = a condição comercial citada (ex.: "10% por 12 meses"), sem inventar; campos service_* e z3_alt_* vazios; tem_roi=false e custo_mensal=0. mrr_citado começa com "MRR não mapeado: reunião de parceria, sem plano cotado" e depois lista os termos comerciais citados. Em parceria não se aplicam matriz de placas, planos nem Service. FIDELIDADE EM PARCERIA: (a) cada número pertence a quem o disse — nunca atribua ao parceiro uma métrica que o executivo citou sobre a própria Frota162 (ex.: o perfil de cliente de 40 a 100 placas é da Frota162, não da base do parceiro); (b) NÃO afirme o que o parceiro não faz, não oferece ou não tem hoje, a menos que ele tenha dito isso; na dúvida, escreva "a confirmar"; (c) eventos só como "convite" ou "presença conjunta" se ambos confirmaram; (d) quem fará cada próximo passo deve seguir o que a transcrição indica (ex.: o executivo falar com o próprio diretor não é ação do parceiro).
 
 PLANOS (nomes atuais): Basic (antigo Enterprise 1) = notificações + multas + SNE + 1 CNPJ NTT. Professional (antigo Enterprise 2) = Basic + IPVA/licenciamento + indicação de condutor + 3 CNPJs. Enterprise (antigo Enterprise 3) = Professional + consulta de CNH + toxicológico + 5 CNPJs. Se a transcrição usar os nomes antigos, converta para os atuais. Recomendação por necessidade (para planos avulsos acima de 40 placas): consulta de CNH = sim -> Enterprise; indicação de condutor e/ou IPVA/licenciamento = sim (sem CNH) -> Professional; nenhum dos três -> Basic. Preços por placa NÃO ficam neste prompt: use apenas os citados na call.
 
@@ -1046,7 +1046,7 @@ async function processarPayloadSalesbud(payload) {
       // e conteúdo), já que a Salesbud só entrega a lista, não o contexto qualitativo.
       const concorrentes = (payload.context && Array.isArray(payload.context.competitorMentions)) ? payload.context.competitorMentions : [];
       const contextoConcorrencia = concorrentes.length > 0
-        ? `\nConcorrentes já identificados nesta call pela Salesbud: ${concorrentes.join(', ')}. Para cada um, descreva no campo concorrencia_detalhe o sentimento do cliente (elogiou/neutro/criticou) e o que especificamente foi dito sobre ele na transcrição.\n`
+        ? `\nConcorrentes já identificados nesta call pela Salesbud: ${concorrentes.join(', ')}. Para cada um, descreva no campo concorrencia_detalhe o sentimento do CLIENTE (elogiou/neutro/criticou) e o que especificamente foi dito sobre ele na transcrição. Se o concorrente apenas foi citado, sem avaliação do cliente (ex.: o executivo o mencionou como contexto histórico), o sentimento é neutro e diga que foi só uma menção.\n`
         : '';
       const contextoExtra = `Nome/email do cliente (Salesbud): ${payload.customerName||'não informado'}\nEmpresa/domínio (Salesbud): ${payload.company||'não informado'}${contextoConcorrencia}\n\n`;
       const conteudo = `Título: ${titulo}\nData: ${dataCallFormatada}\nExecutivo Frota162: ${executivo}\n${contextoExtra}Transcrição:\n${transcricao}`;
@@ -1112,7 +1112,10 @@ async function processarPayloadSalesbud(payload) {
       // Detalhe qualitativo (sentimento + o que foi dito) — vem da análise do Claude,
       // que recebeu os nomes dos concorrentes como contexto (ver contextoConcorrencia acima)
       const linhaConcorrenciaDetalhe = concorrentes.length > 0 && d.concorrencia_detalhe ? `\n- *Sobre a concorrência:* ${d.concorrencia_detalhe}` : '';
-      const linhaContraArgumento = concorrentes.length > 0 && d.concorrencia_contra_argumento ? `\n- *Como contornar:* ${d.concorrencia_contra_argumento}` : '';
+      // Só aparece quando o detalhe registra ELOGIO a um concorrente (objeção real a contornar) e a reunião é de venda.
+      // O modelo já gerou o campo mesmo com "criticou"/"neutro"; por isso a regra também vale aqui, em código.
+      const houveElogio = /elogi/i.test(d.concorrencia_detalhe || '');
+      const linhaContraArgumento = concorrentes.length > 0 && d.tipo_reuniao !== 'parceria' && houveElogio && d.concorrencia_contra_argumento ? `\n- *Como contornar:* ${d.concorrencia_contra_argumento}` : '';
 
       // Desvio da matriz de oferta por placas (ex.: executivo ofereceu plano avulso a lead de até 10 placas)
       const linhaAlertaRegra = d.alerta_regra_placas && String(d.alerta_regra_placas).trim() ? `\n- *Alerta de regra:* ${String(d.alerta_regra_placas).trim()}` : '';
@@ -1253,4 +1256,4 @@ registrarRotaSalesbudSync(app, {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v29 (sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v30 (sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
