@@ -209,7 +209,17 @@ function registrarRotaSalesbudSync(app, deps) {
 
     resumo.a_processar = candidatas.map(c => ({ id: c.m.id, title: c.titulo, dono: c.executivo, meeting_at: c.m.meeting_at, audience: c.m.audience }));
     console.log(`[SalesbudSync] ciclo — desde ${resumo.janela_desde}: ${resumo.total_na_api} reunião(ões) na API, ${candidatas.length} a processar${dry ? ' (dry-run)' : ''}`);
-    if (dry) return resumo;
+
+    // Freio: ?titulo= ignora o corte SALESBUD_SYNC_DESDE (serve para recuperar UMA reunião específica,
+    // como a Baterax). Reuniões processadas por versões anteriores ao v29 não têm o marcador de
+    // duplicidade, então um filtro amplo republicaria o que já saiu no Slack. Acima de 3 casamentos
+    // não processa nada: o dry-run lista as reuniões para você escolher um título mais específico.
+    const amplo = !!tituloFiltro && candidatas.length > 3;
+    if (amplo) {
+      resumo.erro = `?titulo=${tituloFiltro} casa com ${candidatas.length} reuniões — use um título mais específico. Nada foi processado.`;
+      console.log(`[SalesbudSync] RECUSADO — ${resumo.erro}`);
+    }
+    if (dry || amplo) return resumo;
 
     let feitas = 0;
     for (const c of candidatas) {
