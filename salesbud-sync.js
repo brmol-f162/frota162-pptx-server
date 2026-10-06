@@ -7,7 +7,7 @@
 //
 // Pontos de projeto (vêm da documentação da API):
 //  - Não existe sincronização incremental: uma reunião que vira "concluída" depois do ponto já
-//    lido só aparece na próxima varredura. Por isso a janela é ROLANTE (48h) e a deduplicação é
+//    lido só aparece na próxima varredura. Por isso a janela é ROLANTE (96h) e a deduplicação é
 //    feita por marcador, nunca por "desde a última execução".
 //  - Loop de paginação sempre em has_more/next_cursor, nunca no tamanho de data (página curta
 //    ou vazia com has_more=true é normal).
@@ -18,7 +18,7 @@
 // (evita republicar no Slack tudo que o webhook já processou antes da virada).
 
 const BASE = process.env.SALESBUD_API_BASE || 'https://api.salesbud.com.br';
-const JANELA_MS = 48 * 60 * 60 * 1000;
+const JANELA_MS = 96 * 60 * 60 * 1000;   // 96h: cobre fim de semana + feriado (o cron só roda seg-sex 8h-20h)
 const MAX_POR_CICLO = 3;                                   // evita rajada de chamadas à Anthropic
 const PAUSA_ENTRE_MS = Number(process.env.SYNC_PAUSA_MS ?? 8000);
 const MAX_TENTATIVAS_ERRO = 2;
@@ -171,7 +171,7 @@ function registrarRotaSalesbudSync(app, deps) {
       return resumo;
     }
     let desde = new Date(Date.now() - JANELA_MS);
-    if (!tituloFiltro && desdeEnv > desde) desde = desdeEnv;   // com ?titulo= a janela de 48h ignora o corte
+    if (!tituloFiltro && desdeEnv > desde) desde = desdeEnv;   // com ?titulo= a janela de 96h ignora o corte
     resumo.janela_desde = desde.toISOString();
 
     const reunioes = await listarReunioes(resumo.janela_desde);
