@@ -8,6 +8,7 @@ const path = require('path');
 const os = require('os');
 const { registrarRotaSuperBriefing, registrarRotaPolling } = require('./super-briefing');
 const { gerarEEnviarFollowup } = require('./followup-plan');
+const { registrarRotaSalesbudSync } = require('./salesbud-sync');
 
 const app = express();
 app.use(express.text({ type: '*/*', limit: '50mb' }));
@@ -169,6 +170,16 @@ async function claimCall(drive, callId) {
   const vencedor = vivos[0].id;
   return vencedor === meuId;
 }
+// Libera a reserva ("claiming_") de uma tentativa que FALHOU. Sem isso, o marcador temporário
+// (TTL 5 min) faz a tentativa seguinte concluir que "outro processo está cuidando" e a
+// reunião nunca é refeita. Best-effort: nunca lança erro.
+async function liberarClaim(drive, callId) {
+  try {
+    const marcadores = await listMarkersByName(drive, claimingName(callId));
+    for (const m of marcadores) await drive.files.delete({ fileId: m.id, supportsAllDrives: true });
+  } catch (e) { console.log('liberarClaim (não bloqueante):', e.message); }
+}
+
 const COR = {
   laranja:'E8401C', dark:'1A1A1A', branco:'FFFFFF', fundo:'F7F6F4',
   divisor:'E0DFDD', verde:'1E6B1E', vermelho:'CC2200', azul:'1565C0', cinza:'888888',
@@ -219,17 +230,26 @@ function textoMrr(d) {
   return v ? v : 'MRR: não consegui mapear (valor não citado na call)';
 }
 
+// Texto de placas para o Slack: parceria não tem frota a atender; placas 0 = não mapeado.
+function textoPlacas(d) {
+  if (d && d.tipo_reuniao === 'parceria') return 'não se aplica (reunião de parceria)';
+  const p = Number(d && d.placas) || 0;
+  return p > 0 ? `${p} placas` : 'placas não mapeadas';
+}
+
 const SYSTEM = `Você é especialista em vendas B2B da Frota162. Analise a transcrição e retorne SOMENTE JSON válido sem markdown sem backticks.
 
-FIDELIDADE AOS DADOS DA CALL (regra mais importante, vale acima de qualquer outra): placas e valores vêm EXCLUSIVAMENTE do que foi dito na transcrição.
-(1) Volume de placas: use o número dito pelo cliente ou confirmado na call. Se não houver número claro, placas=0. NUNCA estimar, arredondar ou assumir.
-(2) Valores mensais (MRR): use somente o que o executivo CITOU na call. Se citou mais de um (ex.: plataforma e Service), registre todos em mrr_citado, dizendo a qual oferta cada um se refere. Só é permitida aritmética direta sobre números citados (ex.: placas x valor por placa citado). Se nenhum valor foi citado, mrr_citado="" e z3_investimento="A confirmar" — NUNCA preencher com valor de tabela, de exemplo ou de memória.
-(3) R$649 é o piso mensal do plano Enterprise até 40 placas. NÃO é o valor do Service, nem de qualquer plano acima de 40 placas, e só pode aparecer se o executivo o citou.
-(4) Se estiver em dúvida entre dois números, use o dito com mais clareza; se continuar duvidoso, deixe como não mapeado (placas=0 ou mrr_citado vazio). Não mapear é melhor que mapear errado.
+FIDELIDADE AOS DADOS DA CALL (vale acima de qualquer outra regra): placas e valores vêm do que foi dito na transcrição. O material é SEMPRE gerado, com tudo que a call trouxe; só o MRR exige honestidade total.
+(1) Volume de placas: use o número dito na call, aceitando aproximações ditas ("uns 12 veículos"). Havendo vários números, use o da frota que a Frota162 atenderia — não confunda com a base de clientes de um parceiro, nem com a frota de um terceiro indicado. Se a call realmente não permitir determinar, placas=0 e gere o material mesmo assim (placas=0 segue a regra de 1 a 10 placas).
+(2) Valores mensais (MRR): use somente o que o executivo CITOU na call. Se citou mais de um (ex.: plataforma e Service), registre todos em mrr_citado, dizendo a qual oferta cada um se refere. Só aritmética direta sobre números citados (ex.: placas x valor por placa citado). Se nenhum valor foi citado, mrr_citado="" e z3_investimento="A confirmar" — NUNCA preencher com valor de tabela, de exemplo ou de memória; a ausência deve ficar explícita.
+(3) R$649 é o piso mensal do plano Enterprise até 40 placas. NÃO é o valor do Service nem de plano acima de 40 placas, e só pode aparecer se o executivo o citou.
+(4) Valores que o próprio executivo disse de memória ("acho que", "pelo que me lembro") entram no material marcados como "a confirmar".
+
+TIPO DE REUNIÃO (campo tipo_reuniao): "venda_direta" (padrão: empresa com frota própria avaliando contratar a Frota162) ou "parceria" (a outra empresa quer indicar clientes, revender, integrar via API ou trocar clientes, sem contratar a plataforma para uma frota própria). Em parceria: placas=0 e o material descreve a OPORTUNIDADE DE PARCERIA, não dor de frota — s1 cards = quem é o parceiro, tamanho das bases e modelo comercial citado; passos = como a parceria funciona; z3_stat = modelo da parceria (ex.: "API + indicação"); z3_investimento = a condição comercial citada (ex.: "10% por 12 meses"), sem inventar; campos service_* e z3_alt_* vazios; tem_roi=false e custo_mensal=0. mrr_citado começa com "MRR não mapeado: reunião de parceria, sem plano cotado" e depois lista os termos comerciais citados. Em parceria não se aplicam matriz de placas, planos nem Service.
 
 PLANOS (nomes atuais): Basic (antigo Enterprise 1) = notificações + multas + SNE + 1 CNPJ NTT. Professional (antigo Enterprise 2) = Basic + IPVA/licenciamento + indicação de condutor + 3 CNPJs. Enterprise (antigo Enterprise 3) = Professional + consulta de CNH + toxicológico + 5 CNPJs. Se a transcrição usar os nomes antigos, converta para os atuais. Recomendação por necessidade (para planos avulsos acima de 40 placas): consulta de CNH = sim -> Enterprise; indicação de condutor e/ou IPVA/licenciamento = sim (sem CNH) -> Professional; nenhum dos três -> Basic. Preços por placa NÃO ficam neste prompt: use apenas os citados na call.
 
-MATRIZ DE OFERTA POR VOLUME DE PLACAS (regra dura, vigente desde out/2026):
+MATRIZ DE OFERTA POR VOLUME DE PLACAS (somente venda_direta; regra dura, vigente desde out/2026):
 - 1 a 10 placas: SOMENTE Service. O lead nem deve saber que existem planos: o material NÃO menciona Basic, Professional, Enterprise, a palavra "plano", a opção de operar a plataforma sozinho nem valor de plataforma avulsa. Oferta única: "Service Frota162" com UM valor mensal total em z3_investimento (mesmo que o executivo tenha citado plataforma e adicional em separado, exiba só o total). Deixe vazios service_sem_titulo, service_sem_itens, z3_alt_label, z3_alt_investimento e z3_alt_tagline. service_header_sub e service_com_titulo não citam plano.
 - 11 a 40 placas: preferencialmente Service; o plano Enterprise avulso pode ser vendido (único plano permitido nesta faixa — nunca Basic ou Professional).
 - 41 a 60 placas: preferencialmente Service; Basic, Professional e Enterprise avulsos podem ser vendidos.
@@ -249,7 +269,7 @@ REGRAS: valor mínimo de multa R$130 (dizer "mínimo", nunca "médio"). sinal me
 TEMPERATURA: quente=lead engajado perguntas próximos passos decisor envolvido. morno=interesse sem comprometimento claro. frio=pouco engajamento objeções sem próximo passo.
 
 JSON (todos obrigatórios; campos service_* e z3_alt_* só quando a matriz permitir):
-{"empresa":"","perfil_lead":"decisor ou influenciador","placas":0,"cnpjs":0,"segmento":"","tem_roi":false,"mrr_citado":"valores mensais CITADOS na call com a oferta de cada um, ex: 'R$815,00/mês (Service) | R$649,00/mês (plataforma avulsa)'; vazio se nenhum valor foi citado","alerta_regra_placas":"desvio da matriz de placas em 1 frase, ou vazio","temperatura":"quente ou morno ou frio","roi_anual":0,"s1_header_bold":"[Nome do decisor se identificado],\\nvocês têm X placas [situação específica]. Formato: Nome,\\nvocês têm 22 placas rodando SP sem visibilidade. Se sem nome: frase provocativa com dado real max 70 chars","s1_header_sub":"X placas · Y CNPJs · Região","s1_subtitulo":"contexto segmento voltado ao cliente","cards":[{"stat":"","titulo":"max 40 chars","desc":"2-3 linhas específicas voltadas ao cliente"},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""}],"s1_footer_bold":"urgência específica com número real max 80 chars","s1_footer_normal":"complemento","service_header_bold":"frase conceitual SEM valores em R$, ex: 'A Frota162 também pode operar tudo isso para você.'","service_header_sub":"1 a 10 placas: sem citar plano (ex: 'Operação completa pela Frota162'); 11 a 60: pode citar 'Enterprise + Service'","service_sem_titulo":"SEM SERVICE - você opera (vazio para 1 a 10 placas)","service_sem_itens":["item 1 sem service","item 2","item 3","item 4"],"service_com_titulo":"COM SERVICE - a Frota162 opera (para 1 a 10 placas: 'O QUE A FROTA162 OPERA POR VOCE')","service_com_itens":["item 1 com service orientado a resultado","item 2","item 3","item 4"],"service_beneficios":[{"stat":"0","titulo":"Novas contratações","desc":"curto"},{"stat":"Menos","titulo":"Tempo da equipe","desc":"curto"},{"stat":"100%","titulo":"Do risco sai da mão","desc":"curto"}],"service_nota":"reforço qualitativo sem valores em R$","s2_header_bold":"Da dor de -R$X ao retorno de +R$Y por ano. OU X placas sem visibilidade, a recomendação é o Service Frota162 / o plano [nome].","s2_header_normal":"Como a Frota162 resolve, em 3 passos — [Empresa]","z1_stat1":"","z1_sub1":"1 linha","z1_stat2":"","z1_sub2":"1 linha","z1_bullets":["dado específico 1","dado específico 2"],"passos":[{"titulo":"max 35 chars voltado ao cliente","desc":"1 linha no contexto do cliente"},{"titulo":"","desc":""},{"titulo":"","desc":""},{"titulo":"","desc":""}],"z3_stat":"Service Frota162 OU Basic OU Professional OU Enterprise OU ROI anual R$X","z3_sub1":"retorno por ano ou o que está incluso","z3_investimento":"valor mensal CITADO na call da oferta principal, ou 'A confirmar'","z3_badge":"diferencial específico para este cliente","z3_alt_label":"só 11 a 60 placas: 'Ou só a plataforma - você opera (NomeDoPlano)'","z3_alt_investimento":"só 11 a 60 placas: valor avulso citado, ou 'A confirmar'","z3_alt_tagline":"só 11 a 60 placas e só se os dois valores foram citados: 'Menos gente, tempo e risco - por só R$X a mais'","z3_nota":"condições comerciais e limitações reais","s2_cta_bold":"próximo passo combinado na call","s2_cta_normal":"ação concreta","custo_mensal":0,"investimento_mensal_num":0,"dias_payback":0,"s3_header_bold":"Cada mês sem a Frota162 é R$X saindo do caixa da [Empresa].","s3_header_sub":"base confirmada na call","s3_formula":"fórmula usada","s3_nota":"metodologia e limitações","slack_resumo":"2 linhas objetivas SEM EMOJIS: dor principal + alerta crucial","proximo_passo":"ação concreta para o executivo","concorrencia_detalhe":"SÓ preencher se a transcrição menciona concorrente(s): para cada um, nome + sentimento (elogiou/neutro/criticou) + o que foi dito, curto e direto. Ex: 'LW: cliente elogiou o preço mas criticou o suporte lento.' Se vários concorrentes, separar por ; . Deixar vazio se nenhum foi mencionado.","concorrencia_contra_argumento":"SÓ preencher se o cliente ELOGIOU algum concorrente (é uma objeção real a contornar - se foi neutro ou criticou, deixar vazio). Sugira uma resposta prática e curta para o executivo usar na próxima call, baseada SOMENTE nos diferenciais reais e verificáveis da Frota162 (SNE com desconto, plano completo, Service/BPO documental para operar tudo pelo cliente, especialista dedicado, tabela de preços transparente sem surpresa). NUNCA inventar ou afirmar informação negativa não confirmada sobre o concorrente específico - o foco é reforçar o valor da Frota162, não atacar o concorrente."}`;
+{"empresa":"","perfil_lead":"decisor ou influenciador","tipo_reuniao":"venda_direta ou parceria","placas":0,"cnpjs":0,"segmento":"","tem_roi":false,"mrr_citado":"valores mensais CITADOS na call com a oferta de cada um, ex: 'R$815,00/mês (Service) | R$649,00/mês (plataforma avulsa)'; vazio se nenhum valor foi citado","alerta_regra_placas":"desvio da matriz de placas em 1 frase, ou vazio","temperatura":"quente ou morno ou frio","roi_anual":0,"s1_header_bold":"[Nome do decisor se identificado],\\nvocês têm X placas [situação específica]. Formato: Nome,\\nvocês têm 22 placas rodando SP sem visibilidade. Se sem nome: frase provocativa com dado real max 70 chars","s1_header_sub":"X placas · Y CNPJs · Região","s1_subtitulo":"contexto segmento voltado ao cliente","cards":[{"stat":"","titulo":"max 40 chars","desc":"2-3 linhas específicas voltadas ao cliente"},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""}],"s1_footer_bold":"urgência específica com número real max 80 chars","s1_footer_normal":"complemento","service_header_bold":"frase conceitual SEM valores em R$, ex: 'A Frota162 também pode operar tudo isso para você.'","service_header_sub":"1 a 10 placas: sem citar plano (ex: 'Operação completa pela Frota162'); 11 a 60: pode citar 'Enterprise + Service'","service_sem_titulo":"SEM SERVICE - você opera (vazio para 1 a 10 placas)","service_sem_itens":["item 1 sem service","item 2","item 3","item 4"],"service_com_titulo":"COM SERVICE - a Frota162 opera (para 1 a 10 placas: 'O QUE A FROTA162 OPERA POR VOCE')","service_com_itens":["item 1 com service orientado a resultado","item 2","item 3","item 4"],"service_beneficios":[{"stat":"0","titulo":"Novas contratações","desc":"curto"},{"stat":"Menos","titulo":"Tempo da equipe","desc":"curto"},{"stat":"100%","titulo":"Do risco sai da mão","desc":"curto"}],"service_nota":"reforço qualitativo sem valores em R$","s2_header_bold":"Da dor de -R$X ao retorno de +R$Y por ano. OU X placas sem visibilidade, a recomendação é o Service Frota162 / o plano [nome].","s2_header_normal":"Como a Frota162 resolve, em 3 passos — [Empresa]","z1_stat1":"","z1_sub1":"1 linha","z1_stat2":"","z1_sub2":"1 linha","z1_bullets":["dado específico 1","dado específico 2"],"passos":[{"titulo":"max 35 chars voltado ao cliente","desc":"1 linha no contexto do cliente"},{"titulo":"","desc":""},{"titulo":"","desc":""},{"titulo":"","desc":""}],"z3_stat":"Service Frota162 OU Basic OU Professional OU Enterprise OU ROI anual R$X OU o modelo da parceria (só em parceria)","z3_sub1":"retorno por ano ou o que está incluso","z3_investimento":"valor mensal CITADO na call da oferta principal, ou 'A confirmar'","z3_badge":"diferencial específico para este cliente","z3_alt_label":"só 11 a 60 placas: 'Ou só a plataforma - você opera (NomeDoPlano)'","z3_alt_investimento":"só 11 a 60 placas: valor avulso citado, ou 'A confirmar'","z3_alt_tagline":"só 11 a 60 placas e só se os dois valores foram citados: 'Menos gente, tempo e risco - por só R$X a mais'","z3_nota":"condições comerciais e limitações reais","s2_cta_bold":"próximo passo combinado na call","s2_cta_normal":"ação concreta","custo_mensal":0,"investimento_mensal_num":0,"dias_payback":0,"s3_header_bold":"Cada mês sem a Frota162 é R$X saindo do caixa da [Empresa].","s3_header_sub":"base confirmada na call","s3_formula":"fórmula usada","s3_nota":"metodologia e limitações","slack_resumo":"2 linhas objetivas SEM EMOJIS: dor principal + alerta crucial","proximo_passo":"ação concreta para o executivo","concorrencia_detalhe":"SÓ preencher se a transcrição menciona concorrente(s): para cada um, nome + sentimento (elogiou/neutro/criticou) + o que foi dito, curto e direto. Ex: 'LW: cliente elogiou o preço mas criticou o suporte lento.' Se vários concorrentes, separar por ; . Deixar vazio se nenhum foi mencionado.","concorrencia_contra_argumento":"SÓ preencher se o cliente ELOGIOU algum concorrente (é uma objeção real a contornar - se foi neutro ou criticou, deixar vazio). Sugira uma resposta prática e curta para o executivo usar na próxima call, baseada SOMENTE nos diferenciais reais e verificáveis da Frota162 (SNE com desconto, plano completo, Service/BPO documental para operar tudo pelo cliente, especialista dedicado, tabela de preços transparente sem surpresa). NUNCA inventar ou afirmar informação negativa não confirmada sobre o concorrente específico - o foco é reforçar o valor da Frota162, não atacar o concorrente."}`;
 
 function callClaude(text) {
   return new Promise((resolve, reject) => {
@@ -362,7 +382,9 @@ function gerarPPTX(d, outPath) {
   pres.layout = 'LAYOUT_16x9'; // 10 x 5.625"
 
   // Banda de oferta decidida em código pelo volume de placas (ver bandaOferta)
-  const banda = bandaOferta(d.placas);
+  const parceria = d.tipo_reuniao === 'parceria';
+  let banda = parceria ? 'parceria' : bandaOferta(d.placas);
+  if (banda === 'desconhecida') banda = 'service_somente'; // placas não mapeadas: regime mais restritivo (só Service)
   const temSlideService = (banda === 'service_somente' || banda === 'service_preferencial')
     && Array.isArray(d.service_com_itens) && d.service_com_itens.length > 0;
 
@@ -504,7 +526,7 @@ function gerarPPTX(d, outPath) {
 
   // ZONA 2 — COMO A FROTA162 RESOLVE (quase branco)
   s2.addShape(pres.ShapeType.rect,{x:Z2X,y:CY,w:Z2W,h:CH2,fill:{color:'FCFCFB'}});
-  s2.addText('COMO A FROTA162 RESOLVE',{x:Z2X+0.18,y:CY+0.16,w:Z2W-0.24,h:0.22,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.dark,charSpacing:0.5,margin:0});
+  s2.addText(parceria ? 'COMO FUNCIONA A PARCERIA' : 'COMO A FROTA162 RESOLVE',{x:Z2X+0.18,y:CY+0.16,w:Z2W-0.24,h:0.22,fontFace:'Montserrat',fontSize:8.5,bold:true,color:COR.dark,charSpacing:0.5,margin:0});
 
   // Rail vertical + 4 passos numerados
   const SY=CY+0.52, SH=0.74, SG=0.10, rx=Z2X+0.34;
@@ -521,7 +543,7 @@ function gerarPPTX(d, outPath) {
 
   // ZONA 3 — RESULTADO / PLANO RECOMENDADO (verde claro)
   s2.addShape(pres.ShapeType.rect,{x:Z3X,y:CY,w:Z3W,h:CH2,fill:{color:'EAF6EA'}});
-  const z3Rotulo = d.tem_roi ? 'RESULTADO' : (banda === 'planos' ? 'PLANO RECOMENDADO' : 'OFERTA RECOMENDADA');
+  const z3Rotulo = parceria ? 'MODELO DA PARCERIA' : (d.tem_roi ? 'RESULTADO' : (banda === 'planos' ? 'PLANO RECOMENDADO' : 'OFERTA RECOMENDADA'));
   s2.addText(z3Rotulo,{x:Z3X+0.18,y:CY+0.16,w:Z3W-0.24,h:0.22,fontFace:'Montserrat',fontSize:9,bold:true,color:COR.verde,charSpacing:1,margin:0});
 
   // z3_stat — fonte adaptativa
@@ -856,6 +878,16 @@ const SALESBUD_USER_MAP = {
   '15356': 'Bruno Pereira',
 };
 
+// Chave única de uma reunião, igual para o webhook (id numérico) e para a API (id mtg_...):
+// título só com letras/números (tolerante a como cada fonte sanitiza "<>" e espaços) +
+// minuto do início. É o que impede a mesma reunião de ser processada duas vezes.
+function chaveReuniao(titulo, meetingAt) {
+  const t = String(titulo || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const ms = new Date(meetingAt).getTime();
+  const minuto = isNaN(ms) ? 'sem-data' : Math.floor(ms / 60000);
+  return 'mk_' + crypto.createHash('sha1').update(`${t}|${minuto}`).digest('hex').slice(0, 24);
+}
+
 // A Salesbud manda a transcrição em HTML (<p><strong>João:</strong> texto...).
 // Converte para texto plano preservando quebras de linha por parágrafo.
 function stripHtml(html) {
@@ -902,52 +934,34 @@ function verificaAssinaturaSalesbud(req, rawBody) {
   return { ok: valido, motivo: valido ? 'assinatura valida' : 'assinatura invalida' };
 }
 
-app.post('/webhook/salesbud', (req, res) => {
-  // Responde rápido, processa em background (mesmo padrão de robustez do /generate)
-  res.json({ ok: true, status: 'processing' });
-
-  (async () => {
-    let titulo, executivo, callId;
-    try {
-      const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
-
-      const verificacao = verificaAssinaturaSalesbud(req, rawBody);
-      if (!verificacao.ok) {
-        console.log('[Salesbud] Webhook REJEITADO -', verificacao.motivo);
-        return;
-      }
-
-      const payload = JSON.parse(rawBody);
-
-      // LOG INCONDICIONAL — dispara SEMPRE que um webhook chega, antes de qualquer
-      // filtro. É a evidência definitiva de "o webhook chegou" independente do que
-      // acontecer depois (sucesso, descarte ou erro). Buscar por "RECEBIDO" no log
-      // do Render é a forma confiável de confirmar chegada — nunca buscar pelo nome
-      // da empresa, que só existe DEPOIS da análise do Claude e nunca era logado.
-      console.log(`[Salesbud] RECEBIDO — id:${payload.id} titulo:"${payload.title||''}" userId:${payload.userId} status:${payload.status} isExternal:${payload.isExternal} meetingAt:${payload.meetingAt}`);
-
+// Núcleo do pipeline Salesbud — usado pelo webhook E pela sincronização via API.
+// Retorna: 'ok' | 'ja_processada' | 'descartada' (decisão final: não adianta repetir)
+// | 'erro' (falha transitória: vale tentar de novo no próximo ciclo).
+async function processarPayloadSalesbud(payload) {
+  let titulo, executivo, callId, chaveUnica;
+  try {
       // Só processamos o payload de "Reunião" (tem transcription + meetingAt).
       // Payloads de VoIP/WhatsApp são ignorados nesta primeira fase.
       if (!payload.transcription || !payload.meetingAt) {
         console.log('[Salesbud] Payload não é do tipo Reunião, ignorando.');
-        return;
+        return 'descartada';
       }
 
       titulo = payload.title || 'Sem título';
       const userId = String(payload.userId || '');
-      executivo = SALESBUD_USER_MAP[userId] || null;
+      executivo = payload._executivo || SALESBUD_USER_MAP[userId] || null;
       callId = `sb_${payload.id}`;
 
       // Filtro 1 — só reunião concluída (status 3)
       if (payload.status !== 3) {
         console.log('[Salesbud] Descartado — status não é concluído:', payload.status, titulo);
-        return;
+        return 'descartada';
       }
 
       // Filtro 2 — só reunião externa (com cliente) — a Salesbud já classifica isso
       if (payload.isExternal !== true) {
         console.log('[Salesbud] Descartado — reunião interna:', titulo);
-        return;
+        return 'descartada';
       }
 
       // Filtro 3 — título deve conter padrão Frota162
@@ -955,24 +969,32 @@ app.post('/webhook/salesbud', (req, res) => {
       const ehReuniaoCliente = tituloLower.includes('frota162 ><') || tituloLower.includes('frota162 <>') || tituloLower.includes('frota162><') || tituloLower.includes('frota162<>') || tituloLower.includes('frota 162');
       if (!ehReuniaoCliente) {
         console.log('[Salesbud] Descartado — não é reunião com cliente:', titulo);
-        return;
+        return 'descartada';
       }
 
       // Filtro 4 — executivo autorizado (o webhook já pode estar filtrado por usuário
       // na própria Salesbud, mas mantemos esta checagem como segunda camada de defesa)
       if (!executivo) {
         console.log('[Salesbud] Descartado — userId não mapeado:', userId, titulo);
-        return;
+        return 'descartada';
       }
 
       const drive = getDriveClient();
 
       // Filtro 5 — já processada / corrida de paralelismo (mesma infra de marcadores
       // do fluxo Elephan, mas com callId prefixado "sb_" = isolamento total)
-      const devoProcessar = await claimCall(drive, callId);
+      // Chave única da reunião (título normalizado + minuto): é a MESMA para o webhook e
+      // para a sincronização via API, então as duas fontes disputam o mesmo marcador e
+      // só uma processa. O marcador legado (sb_<id numérico>) continua valendo para o webhook.
+      chaveUnica = chaveReuniao(payload.title, payload.meetingAt);
+      if (!payload._origemApi && await isProcessed(drive, callId)) {
+        console.log('[Salesbud] Já processada (marcador legado), pulando:', callId);
+        return 'ja_processada';
+      }
+      const devoProcessar = await claimCall(drive, chaveUnica);
       if (!devoProcessar) {
-        console.log('[Salesbud] Já processada ou perdeu a corrida, pulando:', callId);
-        return;
+        console.log('[Salesbud] Já processada ou perdeu a corrida, pulando:', callId, chaveUnica);
+        return 'ja_processada';
       }
 
       // Filtro 6 — data da reunião precisa ser HOJE (Brasília UTC-3).
@@ -987,13 +1009,15 @@ app.post('/webhook/salesbud', (req, res) => {
         dataCallStr = dBrasilia.toISOString().slice(0, 10);
         dataCallFormatada = dBrasilia.toISOString().slice(0, 16).replace('T', ' ');
       }
-      if (!dataCallStr || dataCallStr !== hojeStr) {
+      // Via API a janela já é controlada pela sincronização (48h, a partir de SALESBUD_SYNC_DESDE);
+      // o filtro de "hoje" vale só para o webhook, que entrega na hora.
+      if (!dataCallStr || (!payload._origemApi && dataCallStr !== hojeStr)) {
         console.log('[Salesbud] Descartado — reunião não é de hoje:', dataCallStr, 'hoje:', hojeStr, titulo);
-        return;
+        return 'descartada';
       }
 
       // Transcrição: remove HTML, valida tamanho mínimo. Aviso único se curta demais.
-      const transcricao = stripHtml(payload.transcription);
+      const transcricao = payload.transcriptionIsPlain ? String(payload.transcription).trim() : stripHtml(payload.transcription);
       if (!transcricao || transcricao.length < 500) {
         const jaAvisou = await isMarked(drive, `descartada_${callId}`);
         if (!jaAvisou) {
@@ -1002,7 +1026,7 @@ app.post('/webhook/salesbud', (req, res) => {
         } else {
           console.log('[Salesbud] Descartado (silencioso, já avisado antes) — transcrição curta:', callId);
         }
-        return;
+        return 'descartada';
       }
 
       // Salva a transcrição em .txt no Drive — ANTES do Claude, para termos o
@@ -1041,21 +1065,13 @@ app.post('/webhook/salesbud', (req, res) => {
       const empresaValida = d.empresa && d.empresa !== 'Empresa Não Identificada' && d.empresa !== 'Não identificado' && d.empresa !== '';
       if (!empresaValida) {
         console.log('[Salesbud] Descartado — empresa não identificada após análise Claude:', titulo, '| empresa:', d.empresa);
-        return;
+        return 'descartada';
       }
 
-      // Volume de placas não mapeado: NÃO gera material (a faixa de oferta — só Service,
-      // Service preferencial ou planos — depende dele e um chute apresentaria plano/valor
-      // errado à diretoria do cliente). Avisa no Slack, uma vez por call.
-      const placasValidas = d.placas && d.placas > 0;
-      if (!placasValidas) {
-        console.log('[Salesbud] Placas não mapeadas — material não gerado:', titulo);
-        const jaAvisouPlacas = await isMarked(drive, `semplacas_${callId}`);
-        if (!jaAvisouPlacas) {
-          await postSlack(`:warning: *[Salesbud] Não consegui mapear o volume de placas* — ${titulo} (${executivo}). O material não foi gerado para não apresentar plano ou valor errado. Confirme o volume com o executivo.`, process.env.SLACK_WEBHOOK_URL).catch(()=>{});
-          await markGeneric(drive, `semplacas_${callId}`);
-        }
-        return;
+      // Placas não mapeadas NÃO bloqueiam o material: ele sai com tudo que a call trouxe
+      // (placas=0 segue a regra de 1 a 10 placas). Só o MRR exige honestidade (ver textoMrr).
+      if (!(d.placas > 0) && d.tipo_reuniao !== 'parceria') {
+        console.log('[Salesbud] Placas não mapeadas — material gerado mesmo assim:', titulo);
       }
 
       const empresa = d.empresa || 'Prospect';
@@ -1105,7 +1121,7 @@ app.post('/webhook/salesbud', (req, res) => {
       const justificativaScore = payload.analytics && payload.analytics.justification ? payload.analytics.justification : '';
       const linhaScore = scoreSalesbud != null ? `\n- *Score Salesbud:* ${scoreSalesbud}/10` : '';
 
-      const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${d.placas} placas · ${textoMrr(d)}${linhaAlertaRegra}\n- *ROI estimado:* ${roiTexto}${linhaConcorrentes}${linhaConcorrenciaDetalhe}${linhaContraArgumento}${linhaScore}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+      const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${textoPlacas(d)} · ${textoMrr(d)}${linhaAlertaRegra}\n- *ROI estimado:* ${roiTexto}${linhaConcorrentes}${linhaConcorrenciaDetalhe}${linhaContraArgumento}${linhaScore}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
 
       console.log(`[Salesbud] SUCESSO — titulo:"${titulo}" empresa:"${empresa}" placas:${d.placas} executivo:${executivo}`);
       await postSlack(msg, process.env.SLACK_WEBHOOK_URL);
@@ -1137,20 +1153,56 @@ app.post('/webhook/salesbud', (req, res) => {
 
       // Só marca sucesso definitivo depois do Slack confirmar entrega
       await markProcessed(drive, callId);
+      await markProcessed(drive, chaveUnica);
 
       // ── Sugestão de Follow-up (módulo isolado, nunca bloqueia o principal) ──
       // Roda DEPOIS do markProcessed: se falhar, a call já está marcada como
       // processada (o slide estratégico já foi entregue) e não deve ser
       // reprocessada — a falha aqui é só logada por gerarEEnviarFollowup.
-      await gerarEEnviarFollowup({ empresa, executivo, transcricao, dCall: d, postSlack });
+      if (d.tipo_reuniao !== 'parceria') {
+        await gerarEEnviarFollowup({ empresa, executivo, transcricao, dCall: d, postSlack });
+      }
+
+      return 'ok';
 
     } catch(err) {
       console.error('[Salesbud] Background error:', err.message);
+      if (chaveUnica) { try { await liberarClaim(getDriveClient(), chaveUnica); } catch (e) {} }
       try {
         await postSlack(`:warning: *[Salesbud] Erro ao gerar material* — ${titulo||'Sem título'} (${executivo||'?'})\nMotivo: ${err.message}`, process.env.SLACK_WEBHOOK_URL);
       } catch(e2) {
         console.error('[Salesbud] Falha ao avisar erro no Slack:', e2.message);
       }
+      return 'erro';
+    }
+}
+
+app.post('/webhook/salesbud', (req, res) => {
+  // Responde rápido, processa em background (mesmo padrão de robustez do /generate)
+  res.json({ ok: true, status: 'processing' });
+
+  (async () => {
+    try {
+      const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+
+      const verificacao = verificaAssinaturaSalesbud(req, rawBody);
+      if (!verificacao.ok) {
+        console.log('[Salesbud] Webhook REJEITADO -', verificacao.motivo);
+        return;
+      }
+
+      const payload = JSON.parse(rawBody);
+
+      // LOG INCONDICIONAL — dispara SEMPRE que um webhook chega, antes de qualquer
+      // filtro. É a evidência definitiva de "o webhook chegou" independente do que
+      // acontecer depois (sucesso, descarte ou erro). Buscar por "RECEBIDO" no log
+      // do Render é a forma confiável de confirmar chegada — nunca buscar pelo nome
+      // da empresa, que só existe DEPOIS da análise do Claude e nunca era logado.
+      console.log(`[Salesbud] RECEBIDO — id:${payload.id} titulo:"${payload.title||''}" userId:${payload.userId} status:${payload.status} isExternal:${payload.isExternal} meetingAt:${payload.meetingAt}`);
+
+      await processarPayloadSalesbud(payload);
+    } catch(err) {
+      console.error('[Salesbud] Erro ao receber webhook:', err.message);
     }
   })();
 });
@@ -1194,5 +1246,11 @@ app.post('/cron/checklist-diario', (req, res) => {
 registrarRotaSuperBriefing(app, getDriveClient, claimCall, markProcessed);
 registrarRotaPolling(app, getDriveClient, claimCall, markProcessed);
 
+// ==== SINCRONIZAÇÃO VIA API DA SALESBUD (rede de segurança do webhook + gatilho principal) ====
+registrarRotaSalesbudSync(app, {
+  processar: processarPayloadSalesbud,
+  getDriveClient, isProcessed, isMarked, markGeneric, chaveReuniao,
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v27 (matriz de placas + service-first + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v29 (sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
