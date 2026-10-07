@@ -155,7 +155,7 @@ function montarPayload(m, tr, avaliacao, executivo) {
 
 // ── Rota ──────────────────────────────────────────────────────────────────
 function registrarRotaSalesbudSync(app, deps) {
-  const { processar, getDriveClient, isProcessed, isMarked, markGeneric, chaveReuniao } = deps;
+  const { processar, getDriveClient, isProcessed, isMarked, markGeneric, chavesReuniao, jaEmMemoria } = deps;
   const memoria = new Set();        // reuniões já resolvidas neste processo (evita consultar o Drive à toa)
   const tentativas = new Map();     // callId -> falhas transitórias
   const avisadasForaPadrao = new Set();
@@ -197,9 +197,12 @@ function registrarRotaSalesbudSync(app, deps) {
       if (m.no_show) { resumo.ignoradas.push({ id: m.id, title: titulo, motivo: 'no_show' }); continue; }
 
       const callId = `sb_${m.id}`;
-      const chave = chaveReuniao(titulo, m.meeting_at);
-      if (memoria.has(chave)) continue;
-      if (await isProcessed(drive, chave) || await isMarked(drive, `sbfinal_${callId}`)) { memoria.add(chave); continue; }
+      const chaves = chavesReuniao(titulo, m.meeting_at, executivo);   // [chave por dono+minuto, chave antiga por título]
+      const chave = chaves[0];
+      if (memoria.has(chave) || (jaEmMemoria && jaEmMemoria(chave))) continue;   // concluída ou em andamento neste processo
+      let feita = false;
+      for (const k of chaves) { if (await isProcessed(drive, k)) { feita = true; break; } }
+      if (feita || await isMarked(drive, `sbfinal_${callId}`)) { memoria.add(chave); continue; }
       if (!m.transcript || !m.transcript.available) {
         resumo.ignoradas.push({ id: m.id, title: titulo, motivo: 'transcricao_indisponivel_ainda' });
         continue;
