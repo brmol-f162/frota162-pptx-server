@@ -888,6 +888,23 @@ function chaveReuniao(titulo, meetingAt) {
   return 'mk_' + crypto.createHash('sha1').update(`${t}|${minuto}`).digest('hex').slice(0, 24);
 }
 
+// Chave por DONO + minuto: não depende do título, que a Salesbud pode entregar diferente no webhook e na
+// API (sanitização, espaços, caracteres). Um mesmo executivo não inicia duas reuniões no mesmo minuto.
+function chaveReuniaoPorDono(executivo, meetingAt) {
+  const e = String(executivo || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const ms = new Date(meetingAt).getTime();
+  const minuto = isNaN(ms) ? 'sem-data' : Math.floor(ms / 60000);
+  return 'mk2_' + crypto.createHash('sha1').update(`${e}|${minuto}`).digest('hex').slice(0, 24);
+}
+// [chave nova, chave antiga por título] — a antiga continua sendo consultada (reuniões já processadas pelo v29/v30).
+function chavesReuniao(titulo, meetingAt, executivo) {
+  return [chaveReuniaoPorDono(executivo, meetingAt), chaveReuniao(titulo, meetingAt)];
+}
+
+// Reuniões em andamento ou concluídas NESTE processo. O Render free roda uma única instância, então isto resolve a
+// corrida webhook x API sem depender da busca do Drive (que é eventualmente consistente). Só 'erro' libera a chave.
+const reunioesEmMemoria = new Set();
+
 // A Salesbud manda a transcrição em HTML (<p><strong>João:</strong> texto...).
 // Converte para texto plano preservando quebras de linha por parágrafo.
 function stripHtml(html) {
@@ -979,24 +996,6 @@ async function processarPayloadSalesbud(payload) {
         return 'descartada';
       }
 
-      const drive = getDriveClient();
-
-      // Filtro 5 — já processada / corrida de paralelismo (mesma infra de marcadores
-      // do fluxo Elephan, mas com callId prefixado "sb_" = isolamento total)
-      // Chave única da reunião (título normalizado + minuto): é a MESMA para o webhook e
-      // para a sincronização via API, então as duas fontes disputam o mesmo marcador e
-      // só uma processa. O marcador legado (sb_<id numérico>) continua valendo para o webhook.
-      chaveUnica = chaveReuniao(payload.title, payload.meetingAt);
-      if (!payload._origemApi && await isProcessed(drive, callId)) {
-        console.log('[Salesbud] Já processada (marcador legado), pulando:', callId);
-        return 'ja_processada';
-      }
-      const devoProcessar = await claimCall(drive, chaveUnica);
-      if (!devoProcessar) {
-        console.log('[Salesbud] Já processada ou perdeu a corrida, pulando:', callId, chaveUnica);
-        return 'ja_processada';
-      }
-
       // Filtro 6 — data da reunião precisa ser HOJE (Brasília UTC-3).
       // meetingAt já vem em ISO — muito mais simples que o parsing que fazíamos com Elephan.
       const offsetBrasilia = 3 * 60;
@@ -1014,6 +1013,33 @@ async function processarPayloadSalesbud(payload) {
       if (!dataCallStr || (!payload._origemApi && dataCallStr !== hojeStr)) {
         console.log('[Salesbud] Descartado — reunião não é de hoje:', dataCallStr, 'hoje:', hojeStr, titulo);
         return 'descartada';
+      }
+
+      const drive = getDriveClient();
+
+      // Filtro 5 — já processada / corrida de paralelismo.
+      // 1) Guarda em MEMÓRIA por dono+minuto (resolve webhook x API na mesma instância).
+      // 2) Marcadores no Drive: id legado do webhook, chave antiga por título (v29/v30) e reserva atômica.
+      chaveUnica = chaveReuniaoPorDono(executivo, payload.meetingAt);
+      const chaveLegada = chaveReuniao(payload.title, payload.meetingAt);
+      if (reunioesEmMemoria.has(chaveUnica)) {
+        console.log('[Salesbud] Já em andamento/concluída neste processo, pulando:', callId, chaveUnica);
+        return 'ja_processada';
+      }
+      reunioesEmMemoria.add(chaveUnica);
+
+      if (!payload._origemApi && await isProcessed(drive, callId)) {
+        console.log('[Salesbud] Já processada (marcador legado), pulando:', callId);
+        return 'ja_processada';
+      }
+      if (await isProcessed(drive, chaveLegada)) {
+        console.log('[Salesbud] Já processada (chave por título), pulando:', callId);
+        return 'ja_processada';
+      }
+      const devoProcessar = await claimCall(drive, chaveUnica);
+      if (!devoProcessar) {
+        console.log('[Salesbud] Já processada ou perdeu a corrida, pulando:', callId, chaveUnica);
+        return 'ja_processada';
       }
 
       // Transcrição: remove HTML, valida tamanho mínimo. Aviso único se curta demais.
@@ -1157,6 +1183,7 @@ async function processarPayloadSalesbud(payload) {
       // Só marca sucesso definitivo depois do Slack confirmar entrega
       await markProcessed(drive, callId);
       await markProcessed(drive, chaveUnica);
+      await markProcessed(drive, chaveLegada);
 
       // ── Sugestão de Follow-up (módulo isolado, nunca bloqueia o principal) ──
       // Roda DEPOIS do markProcessed: se falhar, a call já está marcada como
@@ -1170,7 +1197,10 @@ async function processarPayloadSalesbud(payload) {
 
     } catch(err) {
       console.error('[Salesbud] Background error:', err.message);
-      if (chaveUnica) { try { await liberarClaim(getDriveClient(), chaveUnica); } catch (e) {} }
+      if (chaveUnica) {
+        reunioesEmMemoria.delete(chaveUnica);   // erro transitório: permite nova tentativa
+        try { await liberarClaim(getDriveClient(), chaveUnica); } catch (e) {}
+      }
       try {
         await postSlack(`:warning: *[Salesbud] Erro ao gerar material* — ${titulo||'Sem título'} (${executivo||'?'})\nMotivo: ${err.message}`, process.env.SLACK_WEBHOOK_URL);
       } catch(e2) {
@@ -1252,8 +1282,9 @@ registrarRotaPolling(app, getDriveClient, claimCall, markProcessed);
 // ==== SINCRONIZAÇÃO VIA API DA SALESBUD (rede de segurança do webhook + gatilho principal) ====
 registrarRotaSalesbudSync(app, {
   processar: processarPayloadSalesbud,
-  getDriveClient, isProcessed, isMarked, markGeneric, chaveReuniao,
+  getDriveClient, isProcessed, isMarked, markGeneric, chavesReuniao,
+  jaEmMemoria: (chave) => reunioesEmMemoria.has(chave),
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v30 (sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v31 (dedup por dono+minuto e em memoria + sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
