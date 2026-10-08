@@ -1,0 +1,34 @@
+name: Acordar servidor e sincronizar reunioes
+
+# O Render free dorme de noite. O primeiro pedido do dia vindo do cron-job.org volta 429
+# (recusado na borda) e o servidor nunca acorda; o cron-job.org se desativa apos 26 falhas.
+# Este workflow acorda o servidor ANTES do primeiro ping do dia (origem diferente) e funciona
+# como segundo gatilho da sincronizacao. A rota tem trava de concorrencia: chamar de dois
+# lugares e seguro. Horarios em UTC (Brasilia = UTC-3).
+
+on:
+  schedule:
+    - cron: '45 10 * * 1-5'            # 07:45 Brasilia - acorda o servidor
+    - cron: '55 10 * * 1-5'            # 07:55 Brasilia - reforco
+    - cron: '7,22,37,52 11-22 * * 1-5' # de 15 em 15 min, 08:00-19:59 Brasilia - sincroniza
+  workflow_dispatch: {}                # permite rodar na mao (aba Actions > Run workflow)
+
+jobs:
+  acordar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Acordar o servidor (espera o cold start)
+        run: |
+          curl -sS --fail --max-time 120 --retry 4 --retry-delay 20 --retry-all-errors \
+            -o /dev/null -w "raiz: HTTP %{http_code} em %{time_total}s\n" \
+            https://frota162-pptx-server.onrender.com/
+
+      - name: Sincronizar reunioes
+        env:
+          SYNC_KEY: ${{ secrets.SYNC_KEY }}
+        run: |
+          if [ -z "$SYNC_KEY" ]; then echo "Segredo SYNC_KEY nao configurado no GitHub - sincronizacao pulada"; exit 0; fi
+          curl -sS --fail --max-time 90 --retry 2 --retry-delay 15 \
+            -o /dev/null -w "sync: HTTP %{http_code} em %{time_total}s\n" \
+            "https://frota162-pptx-server.onrender.com/cron/salesbud-sync?key=${SYNC_KEY}"
