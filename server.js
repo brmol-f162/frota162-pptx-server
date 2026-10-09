@@ -1148,9 +1148,9 @@ async function processarPayloadSalesbud(payload) {
 
       const scoreSalesbud = payload.analytics && payload.analytics.score != null ? payload.analytics.score : null;
       const justificativaScore = payload.analytics && payload.analytics.justification ? payload.analytics.justification : '';
-      const linhaScore = scoreSalesbud != null ? `\n- *Score Salesbud:* ${scoreSalesbud}/10` : '';
+      // O score NÃO aparece mais na mensagem do Slack (decisão do Bruno, 09/out/2026); segue gravado na planilha de histórico.
 
-      const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${textoPlacas(d)} · ${textoMrr(d)}${linhaAlertaRegra}\n- *ROI estimado:* ${roiTexto}${linhaConcorrentes}${linhaConcorrenciaDetalhe}${linhaContraArgumento}${linhaScore}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+      const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${textoPlacas(d)} · ${textoMrr(d)}${linhaAlertaRegra}\n- *ROI estimado:* ${roiTexto}${linhaConcorrentes}${linhaConcorrenciaDetalhe}${linhaContraArgumento}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
 
       console.log(`[Salesbud] SUCESSO — titulo:"${titulo}" empresa:"${empresa}" placas:${d.placas} executivo:${executivo}`);
       await postSlack(msg, process.env.SLACK_WEBHOOK_URL);
@@ -1287,4 +1287,4 @@ registrarRotaSalesbudSync(app, {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v31 (dedup por dono+minuto e em memoria + sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v32 (sem score no Slack + dedup por dono+minuto e em memoria + sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
