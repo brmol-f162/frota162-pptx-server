@@ -215,12 +215,65 @@ function getSlackId(nomeOuEmail) {
 // 61+    -> sem Service; planos conforme necessidade
 // A decisão é feita aqui, em código, a partir de d.placas — não depende de o
 // Claude "lembrar" a regra na hora de montar o JSON.
+// Regras de oferta por volume de placas — decididas em CÓDIGO (o modelo só informa fatos).
+const SERVICE_MAX_PLACAS = 60;        // Service existe SOMENTE de 1 a 60 placas; 61 ou mais: NUNCA
+const SERVICE_OBRIGATORIO_ATE = 10;   // até 10 placas: só Service (planos avulsos PROIBIDOS)
+const SERVICE_ATE_10_MENSAL = 700;    // R$/mês vigente desde 16/out/2026 (antes R$979)
+
 function bandaOferta(placas) {
   const p = Number(placas) || 0;
   if (p <= 0) return 'desconhecida';
-  if (p <= 10) return 'service_somente';
-  if (p <= 60) return 'service_preferencial';
+  if (p <= SERVICE_OBRIGATORIO_ATE) return 'service_somente';
+  if (p <= SERVICE_MAX_PLACAS) return 'service_preferencial';
   return 'planos';
+}
+
+// Converte como o plano foi citado em Basic | Professional | Enterprise (ou null).
+function normalizarPlano(x) {
+  const t = String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/professional|enterprise\s*2|\be2\b|plano\s*2/.test(t)) return 'Professional';
+  if (/basic|enterprise\s*1|\be1\b|plano\s*1/.test(t)) return 'Basic';
+  if (/enterprise|\be3\b|plano\s*3/.test(t)) return 'Enterprise';
+  return null;
+}
+
+// Alerta de desvio da regra de oferta. Usa só FATOS informados pelo modelo (placas, service_ofertado,
+// planos_ofertados, service_mensal_citado) e aplica as regras aqui — o modelo errou a fronteira de 60
+// (63 placas) quando decidia sozinho. Retorna texto (vazio = sem desvio).
+function avaliarRegraOferta(d) {
+  if (!d || d.tipo_reuniao === 'parceria') return '';
+  const p = Number(d.placas) || 0;
+  if (p <= 0) return '';                                   // sem volume não há como avaliar a faixa
+  const planos = [...new Set((Array.isArray(d.planos_ofertados) ? d.planos_ofertados : []).map(normalizarPlano).filter(Boolean))];
+  const service = d.service_ofertado === true ? true : (d.service_ofertado === false ? false : null);
+  const msgs = [];
+  if (p <= SERVICE_OBRIGATORIO_ATE) {
+    if (planos.length) msgs.push(`plano avulso (${planos.join(', ')}) ofertado a lead de ${p} placas — até ${SERVICE_OBRIGATORIO_ATE} placas é PROIBIDO, só Service`);
+    if (service === false) msgs.push(`Service não foi ofertado — é obrigatório até ${SERVICE_OBRIGATORIO_ATE} placas`);
+    const v = Number(d.service_mensal_citado);
+    if (v > 0 && Math.abs(v - SERVICE_ATE_10_MENSAL) > 0.5) {
+      msgs.push(`valor do Service citado (R$${Math.round(v).toLocaleString('pt-BR')}/mês) difere do vigente para até ${SERVICE_OBRIGATORIO_ATE} placas (R$${SERVICE_ATE_10_MENSAL}/mês)`);
+    }
+  } else if (p <= 40) {
+    const proibidos = planos.filter(x => x !== 'Enterprise');
+    if (proibidos.length) msgs.push(`${proibidos.join(' e ')} ofertado(s) a lead de ${p} placas — de 11 a 40 placas só o Enterprise avulso é permitido`);
+    if (service === false) msgs.push('Service (opção preferencial de 11 a 40 placas) não foi apresentado');
+  } else if (p <= SERVICE_MAX_PLACAS) {
+    if (service === false) msgs.push('Service (opção preferencial de 41 a 60 placas) não foi apresentado');
+  } else {
+    if (service === true) msgs.push(`Service ofertado a lead de ${p} placas — o Service só existe até ${SERVICE_MAX_PLACAS} placas; acima disso apenas planos avulsos`);
+  }
+  return msgs.join('; ');
+}
+
+// O resumo é texto livre do modelo; se ele insistir em escrever "ALERTA" sobre Service/plano/matriz
+// (o que errou na Noa Locações), a frase é removida: esse alerta agora é calculado em código.
+function limparResumoRegra(txt) {
+  const t = String(txt || '');
+  if (!t) return '';
+  const frases = t.split(/(?<=[.!?])\s+/);
+  const ok = frases.filter(f => !/\bALERTA\b[^.!?]*\b(Service|matriz|plano|planos|Professional|Basic|Enterprise)\b/i.test(f));
+  return ok.join(' ').trim();
 }
 
 // Texto do MRR para o Slack: só o que foi CITADO na call. Sem valor citado,
@@ -249,13 +302,15 @@ TIPO DE REUNIÃO (campo tipo_reuniao): "venda_direta" (padrão: empresa com frot
 
 PLANOS (nomes atuais): Basic (antigo Enterprise 1) = notificações + multas + SNE + 1 CNPJ NTT. Professional (antigo Enterprise 2) = Basic + IPVA/licenciamento + indicação de condutor + 3 CNPJs. Enterprise (antigo Enterprise 3) = Professional + consulta de CNH + toxicológico + 5 CNPJs. Se a transcrição usar os nomes antigos, converta para os atuais. Recomendação por necessidade (para planos avulsos acima de 40 placas): consulta de CNH = sim -> Enterprise; indicação de condutor e/ou IPVA/licenciamento = sim (sem CNH) -> Professional; nenhum dos três -> Basic. Preços por placa NÃO ficam neste prompt: use apenas os citados na call.
 
-MATRIZ DE OFERTA POR VOLUME DE PLACAS (somente venda_direta; regra dura, vigente desde out/2026):
-- 1 a 10 placas: SOMENTE Service. O lead nem deve saber que existem planos: o material NÃO menciona Basic, Professional, Enterprise, a palavra "plano", a opção de operar a plataforma sozinho nem valor de plataforma avulsa. Oferta única: "Service Frota162" com UM valor mensal total em z3_investimento (mesmo que o executivo tenha citado plataforma e adicional em separado, exiba só o total). Deixe vazios service_sem_titulo, service_sem_itens, z3_alt_label, z3_alt_investimento e z3_alt_tagline. service_header_sub e service_com_titulo não citam plano.
+MATRIZ DE OFERTA POR VOLUME DE PLACAS (somente venda_direta; regra dura, vigente desde out/2026). O Service existe SOMENTE de 1 a 60 placas: 61 placas ou mais (63, 80, 120...) está ACIMA do limite e NUNCA tem Service. Use o número exato de placas da call; 63 é maior que 60.
+- 1 a 10 placas: SOMENTE Service — é OBRIGATÓRIO e é a única oferta (vender qualquer plano avulso é PROIBIDO). O lead nem deve saber que existem planos: o material NÃO menciona Basic, Professional, Enterprise, a palavra "plano", a opção de operar a plataforma sozinho nem valor de plataforma avulsa. Oferta única: "Service Frota162" com UM valor mensal total em z3_investimento (mesmo que o executivo tenha citado plataforma e adicional em separado, exiba só o total). Deixe vazios service_sem_titulo, service_sem_itens, z3_alt_label, z3_alt_investimento e z3_alt_tagline. service_header_sub e service_com_titulo não citam plano.
 - 11 a 40 placas: preferencialmente Service; o plano Enterprise avulso pode ser vendido (único plano permitido nesta faixa — nunca Basic ou Professional).
 - 41 a 60 placas: preferencialmente Service; Basic, Professional e Enterprise avulsos podem ser vendidos.
-- Acima de 60 placas: sem Service. Deixe vazios todos os campos service_* e z3_alt_*; z3_stat é o plano recomendado.
+- Acima de 60 placas (61, 62, 63... qualquer volume acima de 60): NÃO existe Service. Nunca ofereça, sugira nem mencione o Service, e nunca cobre a falta dele. Deixe vazios todos os campos service_* e z3_alt_*; z3_stat é o plano recomendado.
 Para 11 a 60 placas: z3_stat="Service Frota162" e z3_investimento = valor total do Service citado na call; a opção avulsa vai na linha secundária: z3_alt_label="Ou só a plataforma - você opera (NomeDoPlano)" e z3_alt_investimento = valor avulso citado (ou "A confirmar" se não foi citado). z3_alt_tagline SÓ se os DOIS valores foram citados: "Menos gente, tempo e risco - por só R$X a mais", com X = valor do Service menos o da plataforma.
-Se o executivo ofereceu na call algo FORA desta matriz (ex.: plano avulso para até 10 placas; Basic ou Professional para até 40; Service acima de 60), o material segue a matriz e alerta_regra_placas descreve o desvio em uma frase curta (vazio se não houve desvio).
+O material SEMPRE segue a matriz, mesmo que o executivo tenha oferecido algo diferente na call. Você NÃO escreve alerta de regra: o sistema calcula o alerta a partir dos FATOS abaixo.
+FATOS DA OFERTA (preencha com o que o EXECUTIVO Frota162 fez na call): service_ofertado = true se ele apresentou/ofertou o Service ao cliente, false se não, null se não dá para saber. planos_ofertados = lista dos planos avulsos que ELE ofereceu ou cotou ao cliente, escritos exatamente como Basic, Professional ou Enterprise (converta "plano 1 / Enterprise 1" para Basic, "plano 2 / Enterprise 2" para Professional, "plano 3 / Enterprise 3" para Enterprise); NÃO inclua planos ou valores de concorrentes nem planos citados só como comparação; [] se nenhum. service_mensal_citado = o valor mensal NUMÉRICO (sem R$) que ele citou para o Service, ou null.
+POLÍTICA DE PREÇO (referência, NÃO é fallback): o Service de 1 a 10 placas custa R$700/mês desde 16/out/2026 (antes R$979). Nunca use esse valor se a call não o citou; z3_investimento e mrr_citado seguem só o que foi citado. O sistema compara service_mensal_citado com R$700 e alerta se divergir.
 
 SERVICE — posicionamento (do treinamento oficial): NÃO é terceirizar para despachante — é BPO documental, a Frota162 assume o processo com especialistas dedicados. Nunca revelar limites internos de quantidade ao cliente (ex: "144 indicações/ano") — dizer apenas "está incluso". Sempre mencionar SNE (desconto por adesão) como pilar central do Service. Benefícios reais a explorar: zero novas contratações, zero curva de aprendizado da equipe do cliente, redução de risco (prazo/indicação/CNH não dependem mais da memória do cliente), tempo da equipe liberado para a operação. Os campos service_* ficam SEM valores em R$ (a revelação numérica fica no slide de solução). Preencha os campos service_* para 1 a 60 placas.
 
@@ -269,7 +324,7 @@ REGRAS: valor mínimo de multa R$130 (dizer "mínimo", nunca "médio"). sinal me
 TEMPERATURA: quente=lead engajado perguntas próximos passos decisor envolvido. morno=interesse sem comprometimento claro. frio=pouco engajamento objeções sem próximo passo.
 
 JSON (todos obrigatórios; campos service_* e z3_alt_* só quando a matriz permitir):
-{"empresa":"","perfil_lead":"decisor ou influenciador","tipo_reuniao":"venda_direta ou parceria","placas":0,"cnpjs":0,"segmento":"","tem_roi":false,"mrr_citado":"valores mensais CITADOS na call com a oferta de cada um, ex: 'R$815,00/mês (Service) | R$649,00/mês (plataforma avulsa)'; vazio se nenhum valor foi citado","alerta_regra_placas":"desvio da matriz de placas em 1 frase, ou vazio","temperatura":"quente ou morno ou frio","roi_anual":0,"s1_header_bold":"[Nome do decisor se identificado],\\nvocês têm X placas [situação específica]. Formato: Nome,\\nvocês têm 22 placas rodando SP sem visibilidade. Se sem nome: frase provocativa com dado real max 70 chars","s1_header_sub":"X placas · Y CNPJs · Região","s1_subtitulo":"contexto segmento voltado ao cliente","cards":[{"stat":"","titulo":"max 40 chars","desc":"2-3 linhas específicas voltadas ao cliente"},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""}],"s1_footer_bold":"urgência específica com número real max 80 chars","s1_footer_normal":"complemento","service_header_bold":"frase conceitual SEM valores em R$, ex: 'A Frota162 também pode operar tudo isso para você.'","service_header_sub":"1 a 10 placas: sem citar plano (ex: 'Operação completa pela Frota162'); 11 a 60: pode citar 'Enterprise + Service'","service_sem_titulo":"SEM SERVICE - você opera (vazio para 1 a 10 placas)","service_sem_itens":["item 1 sem service","item 2","item 3","item 4"],"service_com_titulo":"COM SERVICE - a Frota162 opera (para 1 a 10 placas: 'O QUE A FROTA162 OPERA POR VOCE')","service_com_itens":["item 1 com service orientado a resultado","item 2","item 3","item 4"],"service_beneficios":[{"stat":"0","titulo":"Novas contratações","desc":"curto"},{"stat":"Menos","titulo":"Tempo da equipe","desc":"curto"},{"stat":"100%","titulo":"Do risco sai da mão","desc":"curto"}],"service_nota":"reforço qualitativo sem valores em R$","s2_header_bold":"Da dor de -R$X ao retorno de +R$Y por ano. OU X placas sem visibilidade, a recomendação é o Service Frota162 / o plano [nome].","s2_header_normal":"Como a Frota162 resolve, em 3 passos — [Empresa]","z1_stat1":"","z1_sub1":"1 linha","z1_stat2":"","z1_sub2":"1 linha","z1_bullets":["dado específico 1","dado específico 2"],"passos":[{"titulo":"max 35 chars voltado ao cliente","desc":"1 linha no contexto do cliente"},{"titulo":"","desc":""},{"titulo":"","desc":""},{"titulo":"","desc":""}],"z3_stat":"Service Frota162 OU Basic OU Professional OU Enterprise OU ROI anual R$X OU o modelo da parceria (só em parceria)","z3_sub1":"retorno por ano ou o que está incluso","z3_investimento":"valor mensal CITADO na call da oferta principal, ou 'A confirmar'","z3_badge":"diferencial específico para este cliente","z3_alt_label":"só 11 a 60 placas: 'Ou só a plataforma - você opera (NomeDoPlano)'","z3_alt_investimento":"só 11 a 60 placas: valor avulso citado, ou 'A confirmar'","z3_alt_tagline":"só 11 a 60 placas e só se os dois valores foram citados: 'Menos gente, tempo e risco - por só R$X a mais'","z3_nota":"condições comerciais e limitações reais","s2_cta_bold":"próximo passo combinado na call","s2_cta_normal":"ação concreta","custo_mensal":0,"investimento_mensal_num":0,"dias_payback":0,"s3_header_bold":"Cada mês sem a Frota162 é R$X saindo do caixa da [Empresa].","s3_header_sub":"base confirmada na call","s3_formula":"fórmula usada","s3_nota":"metodologia e limitações","slack_resumo":"2 linhas objetivas SEM EMOJIS: dor principal + alerta crucial","proximo_passo":"ação concreta para o executivo","concorrencia_detalhe":"SÓ preencher se a transcrição menciona concorrente(s): para cada um, nome + sentimento (elogiou/neutro/criticou) + o que foi dito, curto e direto. Ex: 'LW: cliente elogiou o preço mas criticou o suporte lento.' Se vários concorrentes, separar por ; . Deixar vazio se nenhum foi mencionado.","concorrencia_contra_argumento":"SÓ preencher se o cliente ELOGIOU algum concorrente (é uma objeção real a contornar - se foi neutro ou criticou, deixar vazio). Sugira uma resposta prática e curta para o executivo usar na próxima call, baseada SOMENTE nos diferenciais reais e verificáveis da Frota162 (SNE com desconto, plano completo, Service/BPO documental para operar tudo pelo cliente, especialista dedicado, tabela de preços transparente sem surpresa). NUNCA inventar ou afirmar informação negativa não confirmada sobre o concorrente específico - o foco é reforçar o valor da Frota162, não atacar o concorrente."}`;
+{"empresa":"","perfil_lead":"decisor ou influenciador","tipo_reuniao":"venda_direta ou parceria","placas":0,"cnpjs":0,"segmento":"","tem_roi":false,"mrr_citado":"valores mensais CITADOS na call com a oferta de cada um, ex: 'R$815,00/mês (Service) | R$649,00/mês (plataforma avulsa)'; vazio se nenhum valor foi citado","service_ofertado":"true, false ou null (o executivo ofertou o Service?)","planos_ofertados":["Basic, Professional ou Enterprise - só os que o EXECUTIVO ofertou; [] se nenhum"],"service_mensal_citado":"número do valor mensal do Service citado pelo executivo, ou null","temperatura":"quente ou morno ou frio","roi_anual":0,"s1_header_bold":"[Nome do decisor se identificado],\\nvocês têm X placas [situação específica]. Formato: Nome,\\nvocês têm 22 placas rodando SP sem visibilidade. Se sem nome: frase provocativa com dado real max 70 chars","s1_header_sub":"X placas · Y CNPJs · Região","s1_subtitulo":"contexto segmento voltado ao cliente","cards":[{"stat":"","titulo":"max 40 chars","desc":"2-3 linhas específicas voltadas ao cliente"},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""}],"s1_footer_bold":"urgência específica com número real max 80 chars","s1_footer_normal":"complemento","service_header_bold":"frase conceitual SEM valores em R$, ex: 'A Frota162 também pode operar tudo isso para você.'","service_header_sub":"1 a 10 placas: sem citar plano (ex: 'Operação completa pela Frota162'); 11 a 60: pode citar 'Enterprise + Service'","service_sem_titulo":"SEM SERVICE - você opera (vazio para 1 a 10 placas)","service_sem_itens":["item 1 sem service","item 2","item 3","item 4"],"service_com_titulo":"COM SERVICE - a Frota162 opera (para 1 a 10 placas: 'O QUE A FROTA162 OPERA POR VOCE')","service_com_itens":["item 1 com service orientado a resultado","item 2","item 3","item 4"],"service_beneficios":[{"stat":"0","titulo":"Novas contratações","desc":"curto"},{"stat":"Menos","titulo":"Tempo da equipe","desc":"curto"},{"stat":"100%","titulo":"Do risco sai da mão","desc":"curto"}],"service_nota":"reforço qualitativo sem valores em R$","s2_header_bold":"Da dor de -R$X ao retorno de +R$Y por ano. OU X placas sem visibilidade, a recomendação é o Service Frota162 / o plano [nome].","s2_header_normal":"Como a Frota162 resolve, em 3 passos — [Empresa]","z1_stat1":"","z1_sub1":"1 linha","z1_stat2":"","z1_sub2":"1 linha","z1_bullets":["dado específico 1","dado específico 2"],"passos":[{"titulo":"max 35 chars voltado ao cliente","desc":"1 linha no contexto do cliente"},{"titulo":"","desc":""},{"titulo":"","desc":""},{"titulo":"","desc":""}],"z3_stat":"Service Frota162 OU Basic OU Professional OU Enterprise OU ROI anual R$X OU o modelo da parceria (só em parceria)","z3_sub1":"retorno por ano ou o que está incluso","z3_investimento":"valor mensal CITADO na call da oferta principal, ou 'A confirmar'","z3_badge":"diferencial específico para este cliente","z3_alt_label":"só 11 a 60 placas: 'Ou só a plataforma - você opera (NomeDoPlano)'","z3_alt_investimento":"só 11 a 60 placas: valor avulso citado, ou 'A confirmar'","z3_alt_tagline":"só 11 a 60 placas e só se os dois valores foram citados: 'Menos gente, tempo e risco - por só R$X a mais'","z3_nota":"condições comerciais e limitações reais","s2_cta_bold":"próximo passo combinado na call","s2_cta_normal":"ação concreta","custo_mensal":0,"investimento_mensal_num":0,"dias_payback":0,"s3_header_bold":"Cada mês sem a Frota162 é R$X saindo do caixa da [Empresa].","s3_header_sub":"base confirmada na call","s3_formula":"fórmula usada","s3_nota":"metodologia e limitações","slack_resumo":"2 linhas objetivas SEM EMOJIS: dor principal + risco comercial da conta. NÃO escreva alertas sobre regra de oferta, Service, planos ou faixa de placas (o sistema acrescenta isso em campo próprio)","proximo_passo":"ação concreta para o executivo","concorrencia_detalhe":"SÓ preencher se a transcrição menciona concorrente(s): para cada um, nome + sentimento (elogiou/neutro/criticou) + o que foi dito, curto e direto. Ex: 'LW: cliente elogiou o preço mas criticou o suporte lento.' Se vários concorrentes, separar por ; . Deixar vazio se nenhum foi mencionado.","concorrencia_contra_argumento":"SÓ preencher se o cliente ELOGIOU algum concorrente (é uma objeção real a contornar - se foi neutro ou criticou, deixar vazio). Sugira uma resposta prática e curta para o executivo usar na próxima call, baseada SOMENTE nos diferenciais reais e verificáveis da Frota162 (SNE com desconto, plano completo, Service/BPO documental para operar tudo pelo cliente, especialista dedicado, tabela de preços transparente sem surpresa). NUNCA inventar ou afirmar informação negativa não confirmada sobre o concorrente específico - o foco é reforçar o valor da Frota162, não atacar o concorrente."}`;
 
 function callClaude(text) {
   return new Promise((resolve, reject) => {
@@ -842,7 +897,7 @@ app.post('/generate', (req, res) => {
       const roiTexto = roiAnual > 0 ? `R$${Math.round(roiAnual).toLocaleString('pt-BR')}/ano` : 'A calcular';
 
       const dataHoraReuniao = dataCallFormatada;
-      const msg = `:car: *Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataHoraReuniao}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${textoMrr(d)}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+      const msg = `:car: *Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataHoraReuniao}\n- *Placas e MRR estimado:* ${d.placas||0} placas · ${textoMrr(d)}\n- *ROI estimado:* ${roiTexto}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${limparResumoRegra(d.slack_resumo)}`;
 
       await postSlack(msg);
 
@@ -1144,13 +1199,14 @@ async function processarPayloadSalesbud(payload) {
       const linhaContraArgumento = concorrentes.length > 0 && d.tipo_reuniao !== 'parceria' && houveElogio && d.concorrencia_contra_argumento ? `\n- *Como contornar:* ${d.concorrencia_contra_argumento}` : '';
 
       // Desvio da matriz de oferta por placas (ex.: executivo ofereceu plano avulso a lead de até 10 placas)
-      const linhaAlertaRegra = d.alerta_regra_placas && String(d.alerta_regra_placas).trim() ? `\n- *Alerta de regra:* ${String(d.alerta_regra_placas).trim()}` : '';
+      const alertaRegra = avaliarRegraOferta(d);
+      const linhaAlertaRegra = alertaRegra ? `\n- *Alerta de regra:* ${alertaRegra}` : '';
 
       const scoreSalesbud = payload.analytics && payload.analytics.score != null ? payload.analytics.score : null;
       const justificativaScore = payload.analytics && payload.analytics.justification ? payload.analytics.justification : '';
       // O score NÃO aparece mais na mensagem do Slack (decisão do Bruno, 09/out/2026); segue gravado na planilha de histórico.
 
-      const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${textoPlacas(d)} · ${textoMrr(d)}${linhaAlertaRegra}\n- *ROI estimado:* ${roiTexto}${linhaConcorrentes}${linhaConcorrenciaDetalhe}${linhaContraArgumento}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${d.slack_resumo||''}`;
+      const msg = `:car: *[Salesbud] Novo material e análise estratégica* :rocket:\n\n- *Empresa:* ${empresa}\n- *Executivo:* ${execMencao}\n- *Data da reunião:* ${dataCallFormatada}\n- *Placas e MRR estimado:* ${textoPlacas(d)} · ${textoMrr(d)}${linhaAlertaRegra}\n- *ROI estimado:* ${roiTexto}${linhaConcorrentes}${linhaConcorrenciaDetalhe}${linhaContraArgumento}\n- *Material:* <${uploaded.data.webViewLink}|Abrir PPTX>\n- *Temperatura estimada:* ${tempEmoji} ${d.temperatura||'N/A'}\n- *Resumo Geral da negociação:* ${limparResumoRegra(d.slack_resumo)}`;
 
       console.log(`[Salesbud] SUCESSO — titulo:"${titulo}" empresa:"${empresa}" placas:${d.placas} executivo:${executivo}`);
       await postSlack(msg, process.env.SLACK_WEBHOOK_URL);
@@ -1287,4 +1343,4 @@ registrarRotaSalesbudSync(app, {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v32 (sem score no Slack + dedup por dono+minuto e em memoria + sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v33 (regra de oferta em codigo: Service ate 60 placas, ate 10 so Service a R$700 + sem score no Slack + dedup por dono+minuto e em memoria + sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
