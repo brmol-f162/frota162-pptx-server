@@ -34,6 +34,27 @@ function faixaPorPlacas(placas) {
   return FAIXA_ECONOMIA_SNE.key;
 }
 
+// ─── Regra de oferta por volume de placas (decidida em CÓDIGO e injetada no prompt) ───────────
+// Service existe SOMENTE de 1 a 60 placas. Até 10 placas: Service obrigatório, plano avulso PROIBIDO,
+// mensalidade vigente R$700 (desde 16/out/2026; antes R$979). O modelo não decide a faixa sozinho
+// (errou 63 contra 60 no pipeline principal).
+function regraOfertaPorPlacas(placas) {
+  const p = Number(placas) || 0;
+  if (p <= 0) {
+    return 'REGRA DE OFERTA: volume de placas não identificado — NÃO prometa nem cite Service nem planos específicos; trabalhe a dor e o próximo passo combinado.';
+  }
+  if (p <= 10) {
+    return `REGRA DE OFERTA (obrigatória): esta lead tem ${p} placas (1 a 10). A oferta é SOMENTE o Service (a Frota162 opera a rotina documental pelo cliente). É PROIBIDO mencionar plataforma avulsa, planos (Basic, Professional, Enterprise) ou a opção de o cliente operar sozinho. Se precisar citar o valor do Service nesta faixa, o valor vigente é R$700/mês — nunca cite R$979.`;
+  }
+  if (p <= 40) {
+    return `REGRA DE OFERTA (obrigatória): esta lead tem ${p} placas (11 a 40). O Service é a oferta preferencial; o Enterprise avulso é a única alternativa permitida. Nunca cite Basic nem Professional.`;
+  }
+  if (p <= 60) {
+    return `REGRA DE OFERTA (obrigatória): esta lead tem ${p} placas (41 a 60). O Service é a oferta preferencial; Basic, Professional e Enterprise avulsos são alternativas permitidas.`;
+  }
+  return `REGRA DE OFERTA (obrigatória): esta lead tem ${p} placas, ACIMA de 60. NÃO existe Service para esta faixa: nunca ofereça, sugira nem mencione o Service nem a operação da rotina documental pela Frota162. Trabalhe apenas com os planos avulsos (Basic, Professional ou Enterprise) e use somente os valores citados na transcrição.`;
+}
+
 // ─── Segmentação de cadência (porte x Origem N1) ─────────────────────────
 // Racional: mediana de ciclo real por segmento (HubSpot, deals Ganhos
 // jan/2025–set/2026) + benchmark de mercado B2B (8–12 toques / 2–4 semanas;
@@ -144,6 +165,8 @@ NÃO USE, sob nenhuma hipótese: temperatura do deal, status de POC. Foram remov
 
 REGRA DE CASE-STUDY: nunca invente nome de empresa. Se o Super Briefing fornecido já cita um case regional real, reaproveite o nome de lá. Se não houver Super Briefing e você tiver acesso a busca, procure 1 cliente real da Frota162 na mesma UF (site/notícia pública) — se não achar nada confiável, deixe case_nome vazio e use o placeholder "[Cliente na mesma região]" dentro das mensagens.
 
+REGRA DE OFERTA POR VOLUME: o contexto traz uma linha "REGRA DE OFERTA" calculada pelo sistema a partir do número de placas. Ela é OBRIGATÓRIA e vale mais que qualquer inferência sua ou que o que o cliente tenha dito: nunca ofereça, cite ou sugira algo que ela proíba, e nunca cobre a ausência de algo que ela não prevê. O Service só existe de 1 a 60 placas.
+
 REGRA DE NÚMEROS: use SOMENTE a faixa de economia SNE fornecida no contexto (dado real da base). Nunca fabrique outro número.
 
 MECANISMO DO TOQUE DE FECHAMENTO (breakup, sempre o último da régua): funciona por aversão à perda — precisa (a) fechar de fato ("vou encerrar/arquivar esse contato", nunca deixar em aberto pra sempre) e (b) quantificar o custo da inação com a faixa fornecida. Nunca terminar em "sem problema, quando quiser" sem esses dois elementos.
@@ -154,7 +177,7 @@ Retorne SOMENTE JSON válido, sem markdown, sem backticks, neste formato:
 {"objecao_literal":"","promessa_executivo":"","proximo_passo_combinado":"","multithread_necessario":true,"case_nome":"","toques":[{"dia":"D+0","canal":"WhatsApp","objetivo":"1 frase","mensagem":"texto literal, pronto para copiar e enviar"}]}
 O array "toques" deve ter a quantidade e cobrir a janela informadas em "Cadência a seguir". O ÚLTIMO item do array é sempre o toque de fechamento (breakup), seguindo o mecanismo acima. "multithread_necessario" só é true quando a cadência pedir multithread E o perfil do contato parecer influenciador (não decisor) pela transcrição.`;
 
-function callClaudeFollowup({ transcricao, empresa, executivo, hubspotProps, cadencia, faixaEconomia }) {
+function callClaudeFollowup({ transcricao, empresa, executivo, hubspotProps, cadencia, faixaEconomia, placasOferta }) {
   const superBriefing = (hubspotProps && hubspotProps.super_briefing) || '';
   const temSuperBriefing = superBriefing && superBriefing.trim().length > 20;
 
@@ -175,6 +198,7 @@ function callClaudeFollowup({ transcricao, empresa, executivo, hubspotProps, cad
   const conteudo = `Empresa: ${empresa}\nExecutivo: ${executivo}\n${contextoHubspot}${contextoSuperBriefing}
 Cadência a seguir: ${cadencia.toques} toques em ${cadencia.janela}${cadencia.multithread ? ' — incluir pelo menos 1 toque de multithread (e-mail/LinkedIn para um contato de nível decisor, diferente do contato principal, se a transcrição sugerir que o contato principal é influenciador).' : '.'}
 Faixa de economia SNE a usar nos ganchos de case (dado real — não fabricar outro número): mensal ${faixaEconomia.mensal} | anual ${faixaEconomia.anual}.
+${regraOfertaPorPlacas(placasOferta)}
 
 Transcrição da call:
 ${transcricao}`;
@@ -285,7 +309,14 @@ async function gerarEEnviarFollowup({ empresa, executivo, transcricao, dCall, po
     const cadencia = segmentoCadencia(placas, origem);
     const faixaEconomia = faixaPorPlacas(placas);
 
-    const plano = await callClaudeFollowup({ transcricao, empresa, executivo, hubspotProps, cadencia, faixaEconomia });
+    // A oferta segue o número de placas DA CALL (mesma fonte do deck); o HubSpot só entra se a call não informou.
+const placasCall = Number(dCall && dCall.placas) || 0;
+const placasOferta = placasCall > 0 ? placasCall : placas;
+if (placasCall > 0 && placas > 0 && placasCall !== placas) {
+console.log(`[Followup] Placas divergem — call:${placasCall} HubSpot:${placas}; regra de oferta usa o número da call.`);
+}
+
+const plano = await callClaudeFollowup({ transcricao, empresa, executivo, hubspotProps, cadencia, faixaEconomia, placasOferta });
     const msg = formatarMensagemSlack(empresa, plano, cadencia);
 
     await postSlack(msg, webhookUrl);
@@ -295,4 +326,4 @@ async function gerarEEnviarFollowup({ empresa, executivo, transcricao, dCall, po
   }
 }
 
-module.exports = { gerarEEnviarFollowup, faixaPorPlacas, segmentoCadencia, getFollowupWebhook };
+module.exports = { gerarEEnviarFollowup, faixaPorPlacas, segmentoCadencia, getFollowupWebhook, regraOfertaPorPlacas };
