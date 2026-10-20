@@ -87,10 +87,31 @@ async function salvarHistoricoPlanilha(linha) {
 function claimingName(callId) { return `claiming_${callId}.marker`; }
 function processedName(callId) { return `processed_${callId}.marker`; }
 
+// Repete chamadas ao Drive que falham por limite de uso/instabilidade (ex.: "User Rate Limit Exceeded" em 20/out/2026).
+// Se esgotar as tentativas, LANÇA o erro: quem chama falha de forma segura (a reunião fica para o próximo ciclo)
+// em vez de assumir "não existe marcador" e arriscar processar de novo uma reunião já publicada.
+const RE_ERRO_DRIVE_TRANSITORIO = /rate limit|userRateLimitExceeded|rateLimitExceeded|quota|backend error|internal error|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|\b(429|500|502|503|504)\b/i;
+async function driveRetry(fn, rotulo) {
+  const base = Number(process.env.DRIVE_RETRY_BASE_MS ?? 1000);
+  let ultimo;
+  for (let t = 1; t <= 5; t++) {
+    try { return await fn(); }
+    catch (e) {
+      ultimo = e;
+      const msg = String((e && e.message) || e);
+      if (!RE_ERRO_DRIVE_TRANSITORIO.test(msg) || t === 5) break;
+      const espera = base * Math.pow(2, t - 1) + Math.random() * base * 0.25;
+      console.log(`[Drive] ${rotulo || 'chamada'} falhou (${msg.slice(0, 80)}) — tentativa ${t}/5, nova em ${Math.round(espera)}ms`);
+      await new Promise(r => setTimeout(r, espera));
+    }
+  }
+  throw ultimo;
+}
+
 async function listMarkersByName(drive, name) {
-  try {
+  {
     const folderId = process.env.PROCESSED_FOLDER_ID || process.env.PASTA_RAIZ_ID;
-    const res = await drive.files.list({
+    const res = await driveRetry(() => drive.files.list({
       q: `name='${name}' and '${folderId}' in parents and trashed=false`,
       corpora: 'allDrives',
       includeItemsFromAllDrives: true,
@@ -98,19 +119,19 @@ async function listMarkersByName(drive, name) {
       fields: 'files(id,createdTime)',
       spaces: 'drive',
       orderBy: 'createdTime',
-    });
+    }), 'listar marcadores');
     return res.data.files || [];
-  } catch(e) { console.log('listMarkersByName error:', e.message); return []; }
+  }
 }
 
 async function createMarkerFile(drive, name) {
   const folderId = process.env.PROCESSED_FOLDER_ID || process.env.PASTA_RAIZ_ID;
-  const created = await drive.files.create({
+  const created = await driveRetry(() => drive.files.create({
     requestBody: { name, parents: [folderId], mimeType: 'text/plain' },
     media: { mimeType: 'text/plain', body: String(Date.now()) },
     supportsAllDrives: true,
     fields: 'id,createdTime',
-  });
+  }), 'criar marcador');
   return created.data.id;
 }
 
@@ -168,7 +189,12 @@ async function claimCall(drive, callId) {
     return a.id < b.id ? -1 : 1;
   });
   const vencedor = vivos[0].id;
-  return vencedor === meuId;
+  if (vencedor !== meuId) {
+    // Perdeu: remove o próprio marcador. Sem isso ele fica vivo por 5 min e bloqueia a próxima tentativa.
+    try { await driveRetry(() => drive.files.delete({ fileId: meuId, supportsAllDrives: true }), 'apagar marcador perdedor'); } catch (e) { console.log('[Drive] não consegui apagar o marcador perdedor (expira em 5 min):', e.message); }
+    return false;
+  }
+  return true;
 }
 // Libera a reserva ("claiming_") de uma tentativa que FALHOU. Sem isso, o marcador temporário
 // (TTL 5 min) faz a tentativa seguinte concluir que "outro processo está cuidando" e a
@@ -176,7 +202,7 @@ async function claimCall(drive, callId) {
 async function liberarClaim(drive, callId) {
   try {
     const marcadores = await listMarkersByName(drive, claimingName(callId));
-    for (const m of marcadores) await drive.files.delete({ fileId: m.id, supportsAllDrives: true });
+    for (const m of marcadores) await driveRetry(() => drive.files.delete({ fileId: m.id, supportsAllDrives: true }), 'liberar reserva');
   } catch (e) { console.log('liberarClaim (não bloqueante):', e.message); }
 }
 
@@ -326,6 +352,24 @@ TEMPERATURA: quente=lead engajado perguntas próximos passos decisor envolvido. 
 JSON (todos obrigatórios; campos service_* e z3_alt_* só quando a matriz permitir):
 {"empresa":"","perfil_lead":"decisor ou influenciador","tipo_reuniao":"venda_direta ou parceria","placas":0,"cnpjs":0,"segmento":"","tem_roi":false,"mrr_citado":"valores mensais CITADOS na call com a oferta de cada um, ex: 'R$815,00/mês (Service) | R$649,00/mês (plataforma avulsa)'; vazio se nenhum valor foi citado","service_ofertado":"true, false ou null (o executivo ofertou o Service?)","planos_ofertados":["Basic, Professional ou Enterprise - só os que o EXECUTIVO ofertou; [] se nenhum"],"service_mensal_citado":"número do valor mensal do Service citado pelo executivo, ou null","temperatura":"quente ou morno ou frio","roi_anual":0,"s1_header_bold":"[Nome do decisor se identificado],\\nvocês têm X placas [situação específica]. Formato: Nome,\\nvocês têm 22 placas rodando SP sem visibilidade. Se sem nome: frase provocativa com dado real max 70 chars","s1_header_sub":"X placas · Y CNPJs · Região","s1_subtitulo":"contexto segmento voltado ao cliente","cards":[{"stat":"","titulo":"max 40 chars","desc":"2-3 linhas específicas voltadas ao cliente"},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""},{"stat":"","titulo":"","desc":""}],"s1_footer_bold":"urgência específica com número real max 80 chars","s1_footer_normal":"complemento","service_header_bold":"frase conceitual SEM valores em R$, ex: 'A Frota162 também pode operar tudo isso para você.'","service_header_sub":"1 a 10 placas: sem citar plano (ex: 'Operação completa pela Frota162'); 11 a 60: pode citar 'Enterprise + Service'","service_sem_titulo":"SEM SERVICE - você opera (vazio para 1 a 10 placas)","service_sem_itens":["item 1 sem service","item 2","item 3","item 4"],"service_com_titulo":"COM SERVICE - a Frota162 opera (para 1 a 10 placas: 'O QUE A FROTA162 OPERA POR VOCE')","service_com_itens":["item 1 com service orientado a resultado","item 2","item 3","item 4"],"service_beneficios":[{"stat":"0","titulo":"Novas contratações","desc":"curto"},{"stat":"Menos","titulo":"Tempo da equipe","desc":"curto"},{"stat":"100%","titulo":"Do risco sai da mão","desc":"curto"}],"service_nota":"reforço qualitativo sem valores em R$","s2_header_bold":"Da dor de -R$X ao retorno de +R$Y por ano. OU X placas sem visibilidade, a recomendação é o Service Frota162 / o plano [nome].","s2_header_normal":"Como a Frota162 resolve, em 3 passos — [Empresa]","z1_stat1":"","z1_sub1":"1 linha","z1_stat2":"","z1_sub2":"1 linha","z1_bullets":["dado específico 1","dado específico 2"],"passos":[{"titulo":"max 35 chars voltado ao cliente","desc":"1 linha no contexto do cliente"},{"titulo":"","desc":""},{"titulo":"","desc":""},{"titulo":"","desc":""}],"z3_stat":"Service Frota162 OU Basic OU Professional OU Enterprise OU ROI anual R$X OU o modelo da parceria (só em parceria)","z3_sub1":"retorno por ano ou o que está incluso","z3_investimento":"valor mensal CITADO na call da oferta principal, ou 'A confirmar'","z3_badge":"diferencial específico para este cliente","z3_alt_label":"só 11 a 60 placas: 'Ou só a plataforma - você opera (NomeDoPlano)'","z3_alt_investimento":"só 11 a 60 placas: valor avulso citado, ou 'A confirmar'","z3_alt_tagline":"só 11 a 60 placas e só se os dois valores foram citados: 'Menos gente, tempo e risco - por só R$X a mais'","z3_nota":"condições comerciais e limitações reais","s2_cta_bold":"próximo passo combinado na call","s2_cta_normal":"ação concreta","custo_mensal":0,"investimento_mensal_num":0,"dias_payback":0,"s3_header_bold":"Cada mês sem a Frota162 é R$X saindo do caixa da [Empresa].","s3_header_sub":"base confirmada na call","s3_formula":"fórmula usada","s3_nota":"metodologia e limitações","slack_resumo":"2 linhas objetivas SEM EMOJIS: dor principal + risco comercial da conta. NÃO escreva alertas sobre regra de oferta, Service, planos ou faixa de placas (o sistema acrescenta isso em campo próprio)","proximo_passo":"ação concreta para o executivo","concorrencia_detalhe":"SÓ preencher se a transcrição menciona concorrente(s): para cada um, nome + sentimento (elogiou/neutro/criticou) + o que foi dito, curto e direto. Ex: 'LW: cliente elogiou o preço mas criticou o suporte lento.' Se vários concorrentes, separar por ; . Deixar vazio se nenhum foi mencionado.","concorrencia_contra_argumento":"SÓ preencher se o cliente ELOGIOU algum concorrente (é uma objeção real a contornar - se foi neutro ou criticou, deixar vazio). Sugira uma resposta prática e curta para o executivo usar na próxima call, baseada SOMENTE nos diferenciais reais e verificáveis da Frota162 (SNE com desconto, plano completo, Service/BPO documental para operar tudo pelo cliente, especialista dedicado, tabela de preços transparente sem surpresa). NUNCA inventar ou afirmar informação negativa não confirmada sobre o concorrente específico - o foco é reforçar o valor da Frota162, não atacar o concorrente."}`;
 
+// Erros de CONFIGURAÇÃO da API da Anthropic (chave inválida/expirada, chave sem workspace, sem saldo ou limite de uso):
+// repetir não adianta e NÃO é culpa da reunião. Esses erros pausam o pipeline em vez de gastar tentativas e abandonar
+// reuniões (foi o que aconteceu em 19–20/out/2026: chave expirada, 6 reuniões abandonadas e dezenas de alertas).
+const RE_ERRO_CONFIG_API = /invalid x-api-key|invalid_api_key|authentication_error|permission_error|not scoped to a workspace|anthropic-workspace-id|credit balance|usage limits|billing/i;
+function ehErroConfigApi(err) { return RE_ERRO_CONFIG_API.test(String((err && err.message) || err || '')); }
+let ultimoAlertaConfigApi = 0;
+async function alertarErroConfigApi(motivo) {
+  const agora = Date.now();
+  if (agora - ultimoAlertaConfigApi < 60 * 60 * 1000) {
+    console.log('[Salesbud] Erro de configuração da API já alertado há menos de 1h — sem novo alerta.');
+    return;
+  }
+  ultimoAlertaConfigApi = agora;
+  try {
+    await postSlack(`:rotating_light: *[Salesbud] Pipeline PAUSADO — configuração da API da Anthropic*\nMotivo: ${String(motivo).slice(0, 300)}\nNenhuma reunião foi abandonada: o processamento retoma sozinho (nova verificação a cada 30 min) assim que a chave, o workspace ou o saldo estiverem corretos.`, process.env.SLACK_WEBHOOK_URL);
+  } catch (e) { console.error('[Salesbud] Falha ao enviar alerta de configuração da API:', e.message); }
+}
+
 function callClaude(text) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
@@ -339,6 +383,8 @@ function callClaude(text) {
       headers: {
         'x-api-key': process.env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
+        // Chave sem workspace (ex.: gerada pelo admin da organização) exige este cabeçalho.
+        ...(process.env.ANTHROPIC_WORKSPACE_ID ? { 'anthropic-workspace-id': process.env.ANTHROPIC_WORKSPACE_ID } : {}),
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(body)
       }
@@ -1093,6 +1139,9 @@ async function processarPayloadSalesbud(payload) {
       }
       const devoProcessar = await claimCall(drive, chaveUnica);
       if (!devoProcessar) {
+        // Perdeu a reserva para outra tentativa (outra instância, ou marcador antigo de uma falha). A guarda em memória
+        // NÃO pode prender a reunião: sem isto, ela ficava "em andamento" para sempre neste processo (caso GSM, 20/out).
+        reunioesEmMemoria.delete(chaveUnica);
         console.log('[Salesbud] Já processada ou perdeu a corrida, pulando:', callId, chaveUnica);
         return 'ja_processada';
       }
@@ -1138,6 +1187,7 @@ async function processarPayloadSalesbud(payload) {
         catch(e) {
           lastErr = e;
           console.log(`[Salesbud] callClaude tentativa ${tentativa} falhou:`, e.message);
+          if (ehErroConfigApi(e)) break;   // erro de configuração: repetir não resolve
           if (tentativa < 3) await new Promise(r => setTimeout(r, 5000 * tentativa));
         }
       }
@@ -1169,13 +1219,13 @@ async function processarPayloadSalesbud(payload) {
       await gerarPPTX(dClean, outPath);
 
       const pastaId = process.env.PASTA_RAIZ_ID;
-      const uploaded = await drive.files.create({
+      const uploaded = await driveRetry(() => drive.files.create({
         supportsAllDrives: true,
         requestBody: { name: nomeArq, parents: [pastaId], mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
         media: { mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', body: fs.createReadStream(outPath) },
         fields: 'id,name,webViewLink',
-      });
-      await drive.permissions.create({ fileId: uploaded.data.id, supportsAllDrives: true, requestBody: { role: 'writer', type: 'anyone' } });
+      }), 'enviar PPTX');
+      await driveRetry(() => drive.permissions.create({ fileId: uploaded.data.id, supportsAllDrives: true, requestBody: { role: 'writer', type: 'anyone' } }), 'permissão do PPTX');
       fs.unlinkSync(outPath);
 
       const tempEmoji = d.temperatura==='quente' ? '🔴' : d.temperatura==='morno' ? '🟡' : '🔵';
@@ -1195,7 +1245,7 @@ async function processarPayloadSalesbud(payload) {
       const linhaConcorrenciaDetalhe = concorrentes.length > 0 && d.concorrencia_detalhe ? `\n- *Sobre a concorrência:* ${d.concorrencia_detalhe}` : '';
       // Só aparece quando o detalhe registra ELOGIO a um concorrente (objeção real a contornar) e a reunião é de venda.
       // O modelo já gerou o campo mesmo com "criticou"/"neutro"; por isso a regra também vale aqui, em código.
-      const houveElogio = /elogi/i.test(d.concorrencia_detalhe || '');
+      const houveElogio = /(?<!n[ãa]o |sem |nem )\belogiou\b/i.test(d.concorrencia_detalhe || '');   // "sem elogio ou crítica" NÃO conta (Sertraza, 20/out)
       const linhaContraArgumento = concorrentes.length > 0 && d.tipo_reuniao !== 'parceria' && houveElogio && d.concorrencia_contra_argumento ? `\n- *Como contornar:* ${d.concorrencia_contra_argumento}` : '';
 
       // Desvio da matriz de oferta por placas (ex.: executivo ofereceu plano avulso a lead de até 10 placas)
@@ -1257,6 +1307,7 @@ async function processarPayloadSalesbud(payload) {
         reunioesEmMemoria.delete(chaveUnica);   // erro transitório: permite nova tentativa
         try { await liberarClaim(getDriveClient(), chaveUnica); } catch (e) {}
       }
+      if (ehErroConfigApi(err)) { await alertarErroConfigApi(err.message); return 'erro_config'; }
       try {
         await postSlack(`:warning: *[Salesbud] Erro ao gerar material* — ${titulo||'Sem título'} (${executivo||'?'})\nMotivo: ${err.message}`, process.env.SLACK_WEBHOOK_URL);
       } catch(e2) {
@@ -1343,4 +1394,4 @@ registrarRotaSalesbudSync(app, {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v33 (regra de oferta em codigo: Service ate 60 placas, ate 10 so Service a R$700 + sem score no Slack + dedup por dono+minuto e em memoria + sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v35 (drive retry + reserva sem prender reuniao + workspace header + pausa em erro de config da API + regra de oferta em codigo: Service ate 60 placas, ate 10 so Service a R$700 + sem score no Slack + dedup por dono+minuto e em memoria + sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
