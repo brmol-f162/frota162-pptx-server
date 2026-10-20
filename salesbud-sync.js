@@ -22,6 +22,7 @@ const JANELA_MS = 96 * 60 * 60 * 1000;   // 96h: cobre fim de semana + feriado (
 const MAX_POR_CICLO = 3;                                   // evita rajada de chamadas à Anthropic
 const PAUSA_ENTRE_MS = Number(process.env.SYNC_PAUSA_MS ?? 8000);
 const MAX_TENTATIVAS_ERRO = 2;
+const PAUSA_CONFIG_MS = Number(process.env.SYNC_PAUSA_CONFIG_MS ?? 30 * 60 * 1000);   // pausa após erro de configuração da API
 
 // E-mail do dono da reunião na Salesbud -> executivo (mesmos 6 do webhook)
 const EMAIL_PARA_EXECUTIVO = {
@@ -160,6 +161,7 @@ function registrarRotaSalesbudSync(app, deps) {
   const tentativas = new Map();     // callId -> falhas transitórias
   const avisadasForaPadrao = new Set();
   let rodando = false;
+  let pausadoAte = 0;               // erro de configuração da API (chave/workspace/saldo): pausa o ciclo sem abandonar reuniões
 
   async function executar({ dry, tituloFiltro }) {
     const resumo = { dry: !!dry, janela_desde: null, total_na_api: 0, a_processar: [], ignoradas: [], processadas: [] };
@@ -173,6 +175,13 @@ function registrarRotaSalesbudSync(app, deps) {
     let desde = new Date(Date.now() - JANELA_MS);
     if (!tituloFiltro && desdeEnv > desde) desde = desdeEnv;   // com ?titulo= a janela de 96h ignora o corte
     resumo.janela_desde = desde.toISOString();
+
+    if (!dry && Date.now() < pausadoAte) {
+      const ate = new Date(pausadoAte).toISOString();
+      console.log(`[SalesbudSync] PAUSADO por erro de configuração da API — nova tentativa após ${ate} (use ?retomar=1 para forçar).`);
+      resumo.pausado_ate = ate;
+      return resumo;
+    }
 
     const reunioes = await listarReunioes(resumo.janela_desde);
     resumo.total_na_api = reunioes.length;
@@ -201,8 +210,15 @@ function registrarRotaSalesbudSync(app, deps) {
       const chave = chaves[0];
       if (memoria.has(chave) || (jaEmMemoria && jaEmMemoria(chave))) continue;   // concluída ou em andamento neste processo
       let feita = false;
-      for (const k of chaves) { if (await isProcessed(drive, k)) { feita = true; break; } }
-      if (feita || await isMarked(drive, `sbfinal_${callId}`)) { memoria.add(chave); continue; }
+      try {
+        for (const k of chaves) { if (await isProcessed(drive, k)) { feita = true; break; } }
+        if (feita || await isMarked(drive, `sbfinal_${callId}`)) { memoria.add(chave); continue; }
+      } catch (e) {
+        // Falha segura: sem conseguir ler os marcadores NÃO assumimos "não processada" (arriscaria duplicar).
+        console.log(`[SalesbudSync] não consegui verificar marcadores de ${m.id} (${e.message}) — pulo esta reunião neste ciclo.`);
+        resumo.ignoradas.push({ id: m.id, title: titulo, motivo: 'drive_indisponivel_neste_ciclo' });
+        continue;
+      }
       if (!m.transcript || !m.transcript.available) {
         resumo.ignoradas.push({ id: m.id, title: titulo, motivo: 'transcricao_indisponivel_ainda' });
         continue;
@@ -246,6 +262,12 @@ function registrarRotaSalesbudSync(app, deps) {
       feitas++;
       resumo.processadas.push({ id: c.m.id, title: c.titulo, status });
 
+      if (status === 'erro_config') {   // chave/workspace/saldo: NÃO conta tentativa, NÃO abandona; pausa o ciclo todo
+        pausadoAte = Date.now() + PAUSA_CONFIG_MS;
+        console.log(`[SalesbudSync] erro de configuração da API em ${c.m.id} — ciclo pausado por ${Math.round(PAUSA_CONFIG_MS / 60000)} min, nenhuma reunião abandonada.`);
+        resumo.pausado_ate = new Date(pausadoAte).toISOString();
+        break;
+      }
       if (status === 'ok') memoria.add(c.chave);
       else if (status === 'ja_processada') {
         // Só é definitivo se existe o marcador de "processada" (o webhook pode ter concluído).
@@ -274,6 +296,7 @@ function registrarRotaSalesbudSync(app, deps) {
     if (chave && req.query.key !== chave) return res.status(403).json({ ok: false, erro: 'chave inválida' });
 
     const dry = req.query.dry === '1';
+    if (req.query.retomar === '1') { pausadoAte = 0; console.log('[SalesbudSync] pausa por erro de configuração removida manualmente (?retomar=1).'); }
     const tituloFiltro = req.query.titulo ? String(req.query.titulo) : '';
     if (rodando) {
       console.log('[SalesbudSync] ciclo anterior ainda em andamento, pulando esta execução.');
