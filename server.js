@@ -1040,9 +1040,12 @@ function verificaAssinaturaSalesbud(req, rawBody) {
     if (req.headers[h]) { headerEncontrado = h; valorHeader = req.headers[h]; break; }
   }
   if (!headerEncontrado) {
-    console.log('[Salesbud] AVISO: nenhum header de assinatura reconhecido nesta entrega.');
-    console.log('[Salesbud] Headers recebidos (usar para identificar o header real):', JSON.stringify(req.headers));
-    return { ok: true, motivo: 'header de assinatura nao encontrado - aceito temporariamente' };
+    console.log('[Salesbud] Webhook sem header de assinatura. Headers recebidos (só nomes):', Object.keys(req.headers).join(','));
+    // WEBHOOK_ESTRITO=1: sem assinatura = REJEITADO (fecha a brecha: sem isso, qualquer pessoa com a URL consegue gerar
+    // material e gastar a chave da Anthropic). Padrão (desligado) mantém o comportamento atual, que permite o
+    // processamento manual de reuniões pelo webhook.
+    if (process.env.WEBHOOK_ESTRITO === '1') return { ok: false, motivo: 'header de assinatura ausente (WEBHOOK_ESTRITO=1)' };
+    return { ok: true, motivo: 'header de assinatura nao encontrado - aceito (WEBHOOK_ESTRITO desligado)' };
   }
 
   const hashCalculado = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
@@ -1332,6 +1335,9 @@ app.post('/webhook/salesbud', (req, res) => {
       }
 
       const payload = JSON.parse(rawBody);
+      // WEBHOOK_ESTRITO=1: campos internos (usados pela sincronização e pelo processamento manual) nunca são aceitos
+      // de fora: permitiam pular o filtro de data e escolher o executivo.
+      if (process.env.WEBHOOK_ESTRITO === '1') { for (const k of Object.keys(payload)) { if (k.startsWith('_') || k === 'transcriptionIsPlain') delete payload[k]; } }
 
       // LOG INCONDICIONAL — dispara SEMPRE que um webhook chega, antes de qualquer
       // filtro. É a evidência definitiva de "o webhook chegou" independente do que
@@ -1394,4 +1400,4 @@ registrarRotaSalesbudSync(app, {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Frota162 PPTX Server v35 (drive retry + reserva sem prender reuniao + workspace header + pausa em erro de config da API + regra de oferta em codigo: Service ate 60 placas, ate 10 so Service a R$700 + sem score no Slack + dedup por dono+minuto e em memoria + sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
+app.listen(PORT, () => console.log(`Frota162 PPTX Server v37 (webhook estrito opcional + drive retry + reserva sem prender reuniao + workspace header + pausa em erro de config da API + regra de oferta em codigo: Service ate 60 placas, ate 10 so Service a R$700 + sem score no Slack + dedup por dono+minuto e em memoria + sync via API Salesbud + gera sempre + parceria + matriz de placas + MRR so o citado + sem slide de custo em branco + follow-up pos-call + PASTA_RAIZ ${process.env.PASTA_RAIZ_ID}) porta ${PORT}`));
